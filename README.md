@@ -100,3 +100,19 @@ AstrBot/data/plugin_data/astrbot_plugin_autoread/books/
 ## 许可
 
 GNU Affero General Public License v3.0
+
+## AI 使用说明
+
+本项目在开发过程中使用了 AI 辅助工具（Claude Code），用于代码生成、架构设计迭代、文档编写和代码审查。所有 AI 生成的内容均经过人工审查和验证。
+
+具体使用场景包括：
+
+- 插件骨架搭建与模块分层设计
+- 服务层（AutoReadService、NoteWriter、ReadingStateStore 等）代码生成
+- WebUI 管理页面（pages/manager/）的前后端实现
+- 双模型分工阅读架构（ModelRouter + ProviderResolver）的设计与实现
+- 统一阅读记录 Schema（ReadingRecord）的设计与旧格式兼容
+- 配置管理模块（ConfigService）与 WebUI 设置页同步
+- 公开文档（README、ARCHITECTURE、USAGE、CONFIGURATION、DEVELOPMENT、TESTING、WEBUI）的撰写
+
+AI 工具未直接接触：真实运行数据、测试书籍全文、用户聊天记录、API 密钥、服务器信息或任何生产环境敏感数据。
