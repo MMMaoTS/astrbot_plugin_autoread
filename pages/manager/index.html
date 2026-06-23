@@ -129,6 +129,11 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 .settings-form textarea { min-height: 80px; resize: vertical; }
 .settings-actions { display: flex; gap: 8px; padding-top: 8px; }
 .setting-group { padding-left: 0; }
+.provider-picker { margin: 8px 0 14px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
+.provider-picker-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.provider-list { display: flex; gap: 8px; flex-wrap: wrap; }
+.provider-item { padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); cursor: pointer; font-size: 12px; }
+.provider-item:hover, .provider-item.selected { border-color: var(--primary); color: var(--primary); }
 .advanced-toggle { font-size: 12px; color: var(--muted); cursor: pointer; padding: 8px 0; }
 .advanced-toggle:hover { color: var(--primary); }
 @media (max-width: 768px) {
@@ -180,7 +185,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
       <input type="file" id="upload-input" accept=".txt,.md" />
       <button id="btn-upload" class="btn btn-primary">上传并导入</button>
     </div>
-    <p class="hint">支持 .txt / .md，上限 10 MB，上传后自动导入。</p>
+    <p class="hint" id="upload-hint">支持 .txt / .md，上限 10 MB，上传后自动导入。</p>
   </section>
   <section class="books">
     <h2>书籍管理</h2>
@@ -257,6 +262,19 @@ tr:hover td { background: rgba(0,0,0,0.02); }
       <fieldset><legend>模型设置</legend>
         <p class="hint" style="margin-bottom:12px">提供商请通过插件原生设置页选择。下方为当前已保存的模型配置。</p>
 
+        <div class="provider-picker">
+          <div class="provider-picker-controls">
+            <span class="hint">点击 provider 应用到</span>
+            <select id="provider-target">
+              <option value="reader">阅读模型</option>
+              <option value="thinker">思考模型</option>
+              <option value="single">单模型</option>
+            </select>
+          </div>
+          <p id="provider-hint" class="hint" hidden></p>
+          <div id="provider-list" class="provider-list"></div>
+        </div>
+
         <label><span>模型策略</span><select name="model_strategy" id="setting-model-strategy">
           <option value="dual">双模型</option>
           <option value="single">单模型</option>
@@ -296,7 +314,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
         <label><span>启用 WebUI 页面</span><input type="checkbox" name="webui_enabled" /></label>
         <label><span>允许上传书籍</span><input type="checkbox" name="webui_upload_enabled" /></label>
         <label><span>上传大小上限（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
-        <label><span>允许删除书籍</span><input type="checkbox" name="webui_allow_book_delete" /></label>
+        <label><span>允许删除书籍（未实现）</span><input type="checkbox" name="webui_allow_book_delete" /></label>
         <label><span>允许导出笔记</span><input type="checkbox" name="webui_notes_export_enabled" /></label>
       </fieldset>
 
@@ -369,26 +387,38 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 "use strict";
 var bridge = window.AstrBotPluginPage;
 var _providersCache = [];
+var _uploadSettings = { allowedExtensions: [".txt", ".md"], maxUploadMb: 10 };
 
 // ======================================================================
-// API
+// API (with 10s timeout to detect bridge disconnection)
 // ======================================================================
+function _withTimeout(promise, ms, label) {
+  ms = ms || 10000;
+  return Promise.race([
+    promise,
+    new Promise(function(_, reject) {
+      setTimeout(function() {
+        reject(new Error("请求超时: " + (label || "unknown") + " — 插件后端可能未响应"));
+      }, ms);
+    })
+  ]);
+}
 function apiGet(endpoint, params) {
   params = params || {};
-  return bridge.apiGet(endpoint, params).catch(function(err) {
+  return _withTimeout(bridge.apiGet(endpoint, params), 10000, "GET " + endpoint).catch(function(err) {
     console.error("[AutoRead] apiGet " + endpoint + ":", err);
     throw err;
   });
 }
 function apiPost(endpoint, body) {
   body = body || {};
-  return bridge.apiPost(endpoint, body).catch(function(err) {
+  return _withTimeout(bridge.apiPost(endpoint, body), 10000, "POST " + endpoint).catch(function(err) {
     console.error("[AutoRead] apiPost " + endpoint + ":", err);
     throw err;
   });
 }
 function uploadFile(endpoint, file) {
-  return bridge.upload(endpoint, file).catch(function(err) {
+  return _withTimeout(bridge.upload(endpoint, file), 60000, "UPLOAD " + endpoint).catch(function(err) {
     console.error("[AutoRead] upload " + endpoint + ":", err);
     throw err;
   });
@@ -403,7 +433,10 @@ function showMessage(text, type) {
   el.hidden = false;
   el.className = "messages " + type;
   el.textContent = text;
-  setTimeout(function() { el.hidden = true; }, 5000);
+  // 错误消息持续显示，成功消息 5 秒后自动消失
+  if (type !== "error") {
+    setTimeout(function() { el.hidden = true; }, 5000);
+  }
 }
 function showError(text) { showMessage(text, "error"); }
 function escapeHtml(str) {
@@ -530,12 +563,39 @@ function renderBookDetail(data) {
 // ======================================================================
 // Upload
 // ======================================================================
+function updateUploadHint(settings) {
+  settings = settings || {};
+  var extensions = settings.allowed_extensions || _uploadSettings.allowedExtensions;
+  if (typeof extensions === "string") {
+    extensions = extensions.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  }
+  if (!Array.isArray(extensions) || !extensions.length) extensions = [".txt", ".md"];
+  var maxMb = Number(settings.webui_max_upload_mb || _uploadSettings.maxUploadMb || 10);
+  _uploadSettings = { allowedExtensions: extensions, maxUploadMb: maxMb };
+
+  var input = document.getElementById("upload-input");
+  if (input) input.setAttribute("accept", extensions.join(","));
+  var hint = document.getElementById("upload-hint");
+  if (hint) hint.textContent = "支持 " + extensions.join(" / ") + "，上限 " + maxMb + " MB，上传后自动导入。";
+}
+
+function loadUploadSettings() {
+  return apiGet("settings").then(function(data) {
+    var flat = flattenSettings(data.settings || {});
+    updateUploadHint(flat);
+  }).catch(function(err) {
+    console.error("[AutoRead] loadUploadSettings error:", err);
+  });
+}
+
 function uploadBook() {
   var input = document.getElementById("upload-input");
   var file = input.files[0];
   if (!file) { showError("请先选择文件"); return; }
   var ext = "." + file.name.split(".").pop().toLowerCase();
-  if (ext !== ".txt" && ext !== ".md") { showError("仅支持 .txt 和 .md 文件"); return; }
+  var allowed = _uploadSettings.allowedExtensions.map(function(e) { return e.toLowerCase(); });
+  if (allowed.indexOf(ext) === -1) { showError("仅支持 " + allowed.join("、") + " 文件"); return; }
+  if (file.size > _uploadSettings.maxUploadMb * 1024 * 1024) { showError("文件超过大小限制 (" + _uploadSettings.maxUploadMb + " MB)"); return; }
   var btn = document.getElementById("btn-upload");
   btn.disabled = true; btn.textContent = "上传中...";
   uploadFile("books/upload", file).then(function(result) {
@@ -657,14 +717,21 @@ function loadProviders() {
     list.querySelectorAll(".provider-item").forEach(function(item) {
       item.addEventListener("click", function() {
         var pid = item.dataset.providerId;
-        var rEl = document.getElementById("hidden-reader-provider-id");
-        var tEl = document.getElementById("hidden-thinker-provider-id");
-        var rDisp = document.getElementById("display-reader-provider");
-        var tDisp = document.getElementById("display-thinker-provider");
-        if (rEl && !rEl.value) rEl.value = pid;
-        if (tEl && !tEl.value) tEl.value = pid;
-        if (rDisp && !rDisp.value) rDisp.value = pid;
-        if (tDisp && !tDisp.value) tDisp.value = pid;
+        var target = document.getElementById("provider-target").value || "reader";
+        var hiddenMap = {
+          reader: "hidden-reader-provider-id",
+          thinker: "hidden-thinker-provider-id",
+          single: "hidden-single-provider-id"
+        };
+        var displayMap = {
+          reader: "display-reader-provider",
+          thinker: "display-thinker-provider",
+          single: "display-single-provider"
+        };
+        var hiddenEl = document.getElementById(hiddenMap[target]);
+        var displayEl = document.getElementById(displayMap[target]);
+        if (hiddenEl) hiddenEl.value = pid;
+        if (displayEl) displayEl.value = pid;
         list.querySelectorAll(".provider-item").forEach(function(el) { el.classList.remove("selected"); });
         item.classList.add("selected");
       });
@@ -679,6 +746,21 @@ function loadProviders() {
 // ======================================================================
 // Settings
 // ======================================================================
+function flattenSettings(settings) {
+  var flat = {};
+  Object.keys(settings || {}).forEach(function(topKey) {
+    var val = settings[topKey];
+    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+      Object.keys(val).forEach(function(innerKey) {
+        flat[innerKey] = val[innerKey];
+      });
+    } else {
+      flat[topKey] = val;
+    }
+  });
+  return flat;
+}
+
 function loadSettings() {
   var form = document.getElementById("settings-form");
   var errPanel = document.getElementById("settings-error");
@@ -703,17 +785,8 @@ function enableSettingsForm(enabled) {
 function renderSettings(settings) {
   var form = document.getElementById("settings-form");
   // 支持分组结构和扁平结构
-  var flat = {};
-  Object.keys(settings).forEach(function(topKey) {
-    var val = settings[topKey];
-    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
-      Object.keys(val).forEach(function(innerKey) {
-        flat[innerKey] = val[innerKey];
-      });
-    } else {
-      flat[topKey] = val;
-    }
-  });
+  var flat = flattenSettings(settings || {});
+  updateUploadHint(flat);
 
   Object.keys(flat).forEach(function(key) {
     var el = form.querySelector('[name="' + key + '"]');
@@ -866,7 +939,11 @@ function renderBackupPreview(data) {
     '<dt>类型</dt><dd>' + escapeHtml(data.backup_type) + '</dd>' +
     '<dt>总记录</dt><dd>' + (data.total_items || 0) + '</dd>' +
     '<dt>可导入</dt><dd>' + (data.new_items || 0) + '</dd>' +
-    '<dt>已存在跳过</dt><dd>' + (data.skipped_existing_ids || 0) + '</dd>';
+    '<dt>已存在跳过</dt><dd>' + (data.skipped_existing_ids || 0) + '</dd>' +
+    (data.backup_type === "full" ?
+      '<dt>书籍明细</dt><dd>总 ' + (data.books_total_items || 0) + '，可导入 ' + (data.books_new_items || 0) + '，跳过 ' + (data.books_skipped_existing_ids || 0) + '</dd>' +
+      '<dt>笔记明细</dt><dd>总 ' + (data.notes_total_items || 0) + '，可导入 ' + (data.notes_new_items || 0) + '，跳过 ' + (data.notes_skipped_existing_ids || 0) + '</dd>'
+      : '');
 
   var hint = document.getElementById("backup-preview-hint");
   hint.textContent = data.message || "";
@@ -919,7 +996,7 @@ function loadBackupHistory() {
 // Refresh all
 // ======================================================================
 function refreshAll() {
-  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes(), loadBackupHistory()]).then(function() {
+  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes(), loadBackupHistory(), loadUploadSettings()]).then(function() {
     return apiGet("books", { page: 1, page_size: 100 }).then(function(data) {
       updateNotesBookFilter(data.items);
     }).catch(function() {});

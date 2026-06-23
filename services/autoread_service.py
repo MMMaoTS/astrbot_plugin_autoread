@@ -224,7 +224,7 @@ class AutoReadService:
         self,
         *,
         context,
-        config,
+        config_service,
         data_dir: Path,
         state_store,
         book_loader,
@@ -233,7 +233,7 @@ class AutoReadService:
         memory_bridge,
     ):
         self.context = context
-        self.config = config
+        self.config_service = config_service
         self.data_dir = data_dir
         self.state_store = state_store
         self.book_loader = book_loader
@@ -241,12 +241,24 @@ class AutoReadService:
         self.note_writer = note_writer
         self.memory_bridge = memory_bridge
 
+    def _enabled_message(self) -> str | None:
+        """Return a disabled message when the global reading switch is off.
+
+        Returns:
+            A user-visible disabled message, or None when reading is enabled.
+        """
+        if not self.config_service.get("enabled", True):
+            return "阅读功能当前已关闭。请先在插件设置中启用阅读。"
+        return None
+
     # ------------------------------------------------------------------
     # bind
     # ------------------------------------------------------------------
 
     async def bind(self, umo: str) -> str:
         """绑定当前会话，用于后续主动分享。"""
+        if disabled := self._enabled_message():
+            return disabled
         session = await self.state_store.bind_session(umo)
         return (
             f"已绑定当前会话。\n"
@@ -260,6 +272,8 @@ class AutoReadService:
 
     async def import_book(self, filename: str) -> str:
         """导入本地书籍。"""
+        if disabled := self._enabled_message():
+            return disabled
         try:
             imported = await self.book_loader.import_local_book(filename)
         except (ValueError, FileNotFoundError) as exc:
@@ -284,7 +298,7 @@ class AutoReadService:
             f"book_id: {book_id}\n"
             f"总字符数: {meta['total_chars']}\n"
             f"切片数: {meta['total_chunks']}\n"
-            f"每段约 {self.config.get('chunk_size', 1800)} 字"
+            f"每段约 {self.config_service.get('chunk_size', 1800)} 字"
         )
 
     # ------------------------------------------------------------------
@@ -293,6 +307,8 @@ class AutoReadService:
 
     async def list_books(self) -> str:
         """列出已导入书籍。"""
+        if disabled := self._enabled_message():
+            return disabled
         books = await self.state_store.list_books()
         if not books:
             return (
@@ -316,6 +332,8 @@ class AutoReadService:
 
     async def choose_book(self, umo: str, preference: str = "") -> str:
         """根据偏好选择书籍（仅返回建议，不自动开始阅读）。"""
+        if disabled := self._enabled_message():
+            return disabled
         books = await self.state_store.list_books()
         if not books:
             return "暂无已导入的书籍可供选择。"
@@ -360,16 +378,18 @@ class AutoReadService:
         interval_minutes: int | float | None = None,
     ) -> str:
         """开始持续阅读一本书。"""
+        if disabled := self._enabled_message():
+            return disabled
         book = await self.state_store.get_book(book_id)
         if book is None:
             return f"未找到书籍 {book_id}。请先导入或使用 /read list 查看可用书籍。"
 
         if interval_minutes is None:
-            interval_minutes = int(self.config.get("default_interval_minutes", 1440))
+            interval_minutes = int(self.config_service.get("default_interval_minutes", 1440))
         else:
             interval_minutes = int(interval_minutes)
 
-        auto_share_mode = self.config.get("auto_share_mode", "chapter")
+        auto_share_mode = self.config_service.get("auto_share_mode", "chapter")
 
         session = await self.state_store.start_book(
             umo=umo,
@@ -411,6 +431,8 @@ class AutoReadService:
         - "llm_tool" -> _fmt_tool_context (内部上下文 + 自然回应指令)
         - "worker" / 其他 -> _fmt_share_message (自然语言分享)
         """
+        if disabled := self._enabled_message():
+            return disabled
         session = await self.state_store.get_session(umo)
         if session is None:
             return "当前会话尚未绑定。请先使用 /read bind 绑定。"
@@ -451,7 +473,7 @@ class AutoReadService:
                 book_title=book["title"],
                 chunk=chunk,
                 chunk_index=chunk_index,
-                total_chunks=total_chunks,
+                chunk_total=total_chunks,
             )
         except Exception as exc:
             await self.state_store.set_last_error(umo, f"LLM 调用失败: {exc}")
@@ -519,6 +541,8 @@ class AutoReadService:
         source="llm_tool" 时返回内部上下文（带自然回应指令）。
         source="command" 时返回结构化调试信息。
         """
+        if disabled := self._enabled_message():
+            return disabled
         session = await self.state_store.get_session(umo)
         if session is None or not session.get("current_book_id"):
             msg = (
@@ -564,6 +588,8 @@ class AutoReadService:
         source="llm_tool" 时返回内部上下文（带自然回应指令）。
         source="command" 时返回结构化调试信息。
         """
+        if disabled := self._enabled_message():
+            return disabled
         notes = await self.state_store.get_recent_notes_for_session(umo, limit)
         if not notes:
             msg = "暂无阅读笔记。"
@@ -602,6 +628,8 @@ class AutoReadService:
     # ------------------------------------------------------------------
 
     async def pause(self, umo: str) -> str:
+        if disabled := self._enabled_message():
+            return disabled
         session = await self.state_store.get_session(umo)
         if session is None:
             return "当前会话尚未绑定。"
@@ -611,6 +639,8 @@ class AutoReadService:
         return f"已暂停《{session.get('current_book_title', '?')}》的后台阅读。"
 
     async def resume(self, umo: str) -> str:
+        if disabled := self._enabled_message():
+            return disabled
         session = await self.state_store.get_session(umo)
         if session is None:
             return "当前会话尚未绑定。"
@@ -620,6 +650,8 @@ class AutoReadService:
         return f"已恢复《{session.get('current_book_title', '?')}》的后台阅读。"
 
     async def stop(self, umo: str) -> str:
+        if disabled := self._enabled_message():
+            return disabled
         session = await self.state_store.get_session(umo)
         if session is None:
             return "当前会话尚未绑定。"
@@ -652,7 +684,7 @@ class AutoReadService:
         )
 
         try:
-            from astrbot.api.message_components import MessageChain
+            from astrbot.api.event import MessageChain
             await self.context.send_message(umo, MessageChain().message(message))
             return None
         except Exception as exc:

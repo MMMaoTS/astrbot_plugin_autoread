@@ -4,6 +4,8 @@
 不做旧字段回退，不依赖 display_name。
 """
 
+import inspect
+
 from astrbot.api import logger
 
 
@@ -105,21 +107,47 @@ class ProviderResolver:
     # ------------------------------------------------------------------
 
     async def list_providers(self) -> list[dict]:
+        """Return providers from the AstrBot context using available APIs.
+
+        Returns:
+            A normalized provider list suitable for the WebUI.
+        """
         for method_name in ("list_providers", "get_providers", "get_all_providers"):
             method = getattr(self.context, method_name, None)
             if callable(method):
                 try:
-                    result = await method()
+                    result = method()
+                    if inspect.isawaitable(result):
+                        result = await result
+                    if isinstance(result, dict):
+                        result = list(result.values())
                     if isinstance(result, list):
-                        return [
-                            {
-                                "provider_id": p.get("provider_id", p.get("id", p.get("name", ""))),
-                                "display_name": p.get("display_name", p.get("name", "")),
-                                "type": p.get("type", "chat"),
-                                "available": p.get("available", True),
-                            }
-                            for p in result if isinstance(p, dict)
-                        ]
-                except Exception:
-                    pass
+                        items = []
+                        for p in result:
+                            if isinstance(p, dict):
+                                pid = p.get("provider_id", p.get("id", p.get("name", "")))
+                                name = p.get("display_name", p.get("name", pid))
+                                provider_type = p.get("type", "chat")
+                                available = p.get("available", True)
+                            else:
+                                meta = p.meta() if callable(getattr(p, "meta", None)) else getattr(p, "meta", None)
+                                if isinstance(meta, dict):
+                                    pid = meta.get("id", meta.get("provider_id", ""))
+                                    name = meta.get("name", meta.get("display_name", ""))
+                                    provider_type = meta.get("type", "chat")
+                                else:
+                                    pid = getattr(meta, "id", "") if meta is not None else ""
+                                    name = getattr(meta, "name", "") if meta is not None else ""
+                                    provider_type = getattr(meta, "type", "chat") if meta is not None else "chat"
+                                available = getattr(p, "available", True)
+                            if pid:
+                                items.append({
+                                    "provider_id": str(pid),
+                                    "display_name": str(name or pid),
+                                    "type": str(provider_type or "chat"),
+                                    "available": bool(available),
+                                })
+                        return items
+                except Exception as exc:
+                    logger.warning(f"[AutoRead Provider] {method_name} failed: {exc}")
         return []

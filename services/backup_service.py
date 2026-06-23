@@ -39,6 +39,7 @@ class BackupService:
         self.state_store = state_store
         self.backups_dir = data_dir / "backups"
         self.history_path = self.backups_dir / "import_history.jsonl"
+        self._previewed_backup_ids: set[str] = set()
         self._ensure_dirs()
 
     def _ensure_dirs(self):
@@ -161,6 +162,7 @@ class BackupService:
                 "created_at": _now_iso(),
                 "schema_version": 1,
                 "contains": {"books": True, "notes": True, "state": True},
+                "import_policy": {"config": "read_only_snapshot_not_imported"},
             }
             (root / "manifest.json").write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -177,7 +179,7 @@ class BackupService:
                 json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
             )
 
-            # config snapshot (只读参考，不自动恢复)
+            # state/config snapshots are read-only references and are never restored.
             (root / "book_index.json").write_text(
                 json.dumps(list(state.get("books", {}).values()), ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -225,18 +227,57 @@ class BackupService:
                     preview = self._preview_notes_import(zf)
                 else:
                     raise ValueError(f"未知备份类型: {backup_type}")
+                if backup_type == "full":
+                    books_preview = preview
+                    notes_preview = self._preview_notes_import(zf)
+                    preview = {
+                        "total_items": (
+                            books_preview["total_items"] + notes_preview["total_items"]
+                        ),
+                        "new_items": (
+                            books_preview["new_items"] + notes_preview["new_items"]
+                        ),
+                        "skipped_existing_ids": (
+                            books_preview["skipped_existing_ids"]
+                            + notes_preview["skipped_existing_ids"]
+                        ),
+                        "books_total_items": books_preview["total_items"],
+                        "books_new_items": books_preview["new_items"],
+                        "books_skipped_existing_ids": books_preview[
+                            "skipped_existing_ids"
+                        ],
+                        "notes_total_items": notes_preview["total_items"],
+                        "notes_new_items": notes_preview["new_items"],
+                        "notes_skipped_existing_ids": notes_preview[
+                            "skipped_existing_ids"
+                        ],
+                    }
 
             if already_imported:
                 preview["already_imported_backup"] = True
                 preview["new_items"] = 0
                 preview["skipped_existing_ids"] = preview["total_items"]
+                if backup_type == "full":
+                    preview["books_new_items"] = 0
+                    preview["books_skipped_existing_ids"] = preview.get(
+                        "books_total_items", 0
+                    )
+                    preview["notes_new_items"] = 0
+                    preview["notes_skipped_existing_ids"] = preview.get(
+                        "notes_total_items", 0
+                    )
                 preview["message"] = "该备份包已导入过，默认跳过。"
             else:
                 preview["already_imported_backup"] = False
-                preview["message"] = "可合并导入。已存在 ID 会自动跳过。" if preview["new_items"] > 0 else "所有记录均已存在，无需导入。"
+                preview["message"] = (
+                    "可合并导入。已存在 ID 会自动跳过。"
+                    if preview["new_items"] > 0
+                    else "所有记录均已存在，无需导入。"
+                )
 
             preview["backup_id"] = backup_id
             preview["backup_type"] = backup_type
+            self._previewed_backup_ids.add(backup_id)
 
             return preview
         finally:
@@ -252,17 +293,39 @@ class BackupService:
             except Exception:
                 pass
 
+        books_list = []
+        if "book_index.json" in zf.namelist():
+            try:
+                raw_books = json.loads(zf.read("book_index.json").decode("utf-8"))
+                if isinstance(raw_books, list):
+                    books_list = raw_books
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                books_list = []
+
         total = 0
         new_count = 0
         skip_count = 0
-        for name in zf.namelist():
-            if name.startswith("books/") and not name.endswith("/"):
-                book_id = Path(name).stem
+        if books_list:
+            for book in books_list:
+                if not isinstance(book, dict):
+                    continue
+                book_id = book.get("book_id", "")
+                if not book_id:
+                    continue
                 total += 1
                 if book_id in existing_books:
                     skip_count += 1
                 else:
                     new_count += 1
+        else:
+            for name in zf.namelist():
+                if name.startswith("books/") and not name.endswith("/"):
+                    book_id = Path(name).stem
+                    total += 1
+                    if book_id in existing_books:
+                        skip_count += 1
+                    else:
+                        new_count += 1
 
         return {"total_items": total, "new_items": new_count, "skipped_existing_ids": skip_count}
 
@@ -282,6 +345,8 @@ class BackupService:
                         try:
                             rec = json.loads(line)
                             rid = rec.get("record_id", rec.get("note_id", ""))
+                            if not rid:
+                                continue
                             total += 1
                             if rid in existing_records:
                                 skip_count += 1
@@ -316,6 +381,12 @@ class BackupService:
             backup_id = manifest["backup_id"]
             backup_type = manifest["backup_type"]
 
+            if backup_type not in ("books", "notes", "full"):
+                raise ValueError(f"未知备份类型: {backup_type}")
+
+            if backup_id not in self._previewed_backup_ids:
+                raise ValueError("请先解析备份并确认预览结果，再执行合并导入。")
+
             if self._is_backup_imported(backup_id):
                 return {
                     "backup_id": backup_id,
@@ -327,14 +398,33 @@ class BackupService:
 
             result = {"backup_id": backup_id, "backup_type": backup_type}
             with zipfile.ZipFile(zip_path, "r") as zf:
+                imported_total = 0
+                skipped_total = 0
                 if backup_type in ("books", "full"):
-                    result.update(self._do_merge_books(zf))
+                    books_result = self._do_merge_books(zf)
+                    result.update({
+                        "imported_books": books_result["imported_items"],
+                        "skipped_books": books_result["skipped_existing_ids"],
+                    })
+                    imported_total += books_result["imported_items"]
+                    skipped_total += books_result["skipped_existing_ids"]
                 if backup_type in ("notes", "full"):
-                    result.update(self._do_merge_notes(zf))
+                    notes_result = self._do_merge_notes(zf)
+                    result.update({
+                        "imported_notes": notes_result["imported_items"],
+                        "skipped_notes": notes_result["skipped_existing_ids"],
+                    })
+                    imported_total += notes_result["imported_items"]
+                    skipped_total += notes_result["skipped_existing_ids"]
+                result["imported_items"] = imported_total
+                result["skipped_existing_ids"] = skipped_total
 
             result["status"] = "success"
             self._record_history(backup_id, backup_type, result)
-            logger.info(f"[AutoRead Backup] Imported: {backup_id} ({backup_type}) +{result.get('imported_items', 0)}")
+            logger.info(
+                f"[AutoRead Backup] Imported: {backup_id} ({backup_type}) "
+                f"+{result.get('imported_items', 0)}"
+            )
             return result
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -351,46 +441,80 @@ class BackupService:
         imported = 0
         skipped = 0
 
-        for name in zf.namelist():
-            if not name.startswith("books/") or name.endswith("/"):
-                continue
-            book_id = Path(name).stem
-            dest = self.data_dir / name
-            if dest.exists() or book_id in current_books:
-                skipped += 1
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(zf.read(name))
-            imported += 1
-
-        # 还原 chunks
-        for name in zf.namelist():
-            if not name.startswith("chunks/") or name.endswith("/"):
-                continue
-            chunk_id = Path(name).stem
-            dest = self.data_dir / name
-            if dest.exists() or chunk_id in current_books:
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(zf.read(name))
-
-        # 还原 book_index
         if "book_index.json" in zf.namelist():
             try:
                 books_list = json.loads(zf.read("book_index.json").decode("utf-8"))
                 full_state = {}
                 if state.exists():
                     full_state = json.loads(state.read_text(encoding="utf-8"))
+                full_state.setdefault("version", 1)
+                full_state.setdefault("sessions", {})
                 full_state.setdefault("books", {})
                 for b in books_list:
+                    if not isinstance(b, dict):
+                        continue
                     bid = b.get("book_id", "")
-                    if bid and bid not in full_state["books"]:
-                        full_state["books"][bid] = b
+                    source_path = b.get("source_path", "")
+                    chunks_path = b.get("chunks_path", "")
+                    if not bid:
+                        continue
+                    if bid in full_state["books"] or bid in current_books:
+                        skipped += 1
+                        continue
+                    if (
+                        not source_path.startswith("books/")
+                        or ".." in Path(source_path).parts
+                        or source_path not in zf.namelist()
+                    ):
+                        skipped += 1
+                        continue
+                    book_dest = self.data_dir / source_path
+                    if book_dest.exists():
+                        skipped += 1
+                        continue
+                    chunk_dest = None
+                    if chunks_path:
+                        if (
+                            not chunks_path.startswith("chunks/")
+                            or ".." in Path(chunks_path).parts
+                            or chunks_path not in zf.namelist()
+                        ):
+                            skipped += 1
+                            continue
+                        chunk_dest = self.data_dir / chunks_path
+                        if chunk_dest.exists():
+                            skipped += 1
+                            continue
+                    book_dest.parent.mkdir(parents=True, exist_ok=True)
+                    book_dest.write_bytes(zf.read(source_path))
+                    if chunk_dest is not None:
+                        chunk_dest.parent.mkdir(parents=True, exist_ok=True)
+                        chunk_dest.write_bytes(zf.read(chunks_path))
+                    full_state["books"][bid] = b
+                    imported += 1
                 tmp_path = state.with_suffix(".json.tmp")
-                tmp_path.write_text(json.dumps(full_state, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp_path.write_text(
+                    json.dumps(full_state, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
                 os.replace(tmp_path, state)
             except Exception:
-                pass
+                logger.exception("[AutoRead Backup] Failed to merge books from book_index")
+        else:
+            for name in zf.namelist():
+                if not name.startswith("books/") or name.endswith("/"):
+                    continue
+                if ".." in Path(name).parts:
+                    skipped += 1
+                    continue
+                book_id = Path(name).stem
+                dest = self.data_dir / name
+                if dest.exists() or book_id in current_books:
+                    skipped += 1
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(zf.read(name))
+                imported += 1
 
         return {"imported_items": imported, "skipped_existing_ids": skipped}
 
@@ -402,6 +526,8 @@ class BackupService:
         for name in zf.namelist():
             if not name.startswith("notes/") or not name.endswith(".jsonl"):
                 continue
+            if ".." in Path(name).parts:
+                continue
             dest = self.data_dir / name
             content = zf.read(name).decode("utf-8")
             new_lines = []
@@ -412,6 +538,9 @@ class BackupService:
                 try:
                     rec = json.loads(line)
                     rid = rec.get("record_id", rec.get("note_id", ""))
+                    if not rid:
+                        skipped += 1
+                        continue
                     if rid in existing:
                         skipped += 1
                     else:
@@ -497,7 +626,9 @@ class BackupService:
                             continue
                         try:
                             rec = json.loads(line)
-                            ids.add(rec.get("record_id", rec.get("note_id", "")))
+                            rid = rec.get("record_id", rec.get("note_id", ""))
+                            if rid:
+                                ids.add(rid)
                         except json.JSONDecodeError:
                             continue
             except Exception:

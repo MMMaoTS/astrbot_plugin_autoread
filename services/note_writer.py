@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 from astrbot.api import logger
 
-from .reading_record_schema import (
+from ..models.reading_record import (
     new_record,
     model_usage_info,
 )

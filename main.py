@@ -7,17 +7,17 @@ from astrbot.api.star import Context, Star, register
 
 from .services.book_loader import BookLoader
 from .services.text_chunker import TextChunker
-from .services.reading_state import ReadingStateStore
+from .repositories.reading_state_repository import ReadingStateStore
 from .services.note_writer import NoteWriter
 from .services.memory_bridge import MemoryBridge
 from .services.autoread_service import AutoReadService
-from .services.config_service import ConfigService
+from .core.config_service import ConfigService
 from .services.provider_resolver import ProviderResolver
 from .services.model_router import ModelRouter
 from .services.backup_service import BackupService
 from .worker.reading_worker import ReadingWorker
-from .webui.webui_service import WebUIService
-from .webui.webui_api import AutoReadWebUIAPI
+from .core.page_service import WebUIService
+from .core.page_api import AutoReadWebUIAPI
 
 PLUGIN_NAME = "astrbot_plugin_autoread"
 
@@ -86,7 +86,7 @@ class AutoReadPlugin(Star):
         # 业务编排层
         self.autoread_service = AutoReadService(
             context=self.context,
-            config=self.config,
+            config_service=self.config_service,
             data_dir=self.data_dir,
             state_store=self.state_store,
             book_loader=self.book_loader,
@@ -131,6 +131,20 @@ class AutoReadPlugin(Star):
     # ==================================================================
     # 生命周期
     # ==================================================================
+
+    @staticmethod
+    def _get_event(event_or_context):
+        """兼容 AstrBot v4.26+ LLM Tool 新协议。
+
+        v4.26+ 传递 ContextWrapper[AstrAgentContext]，
+        旧版传递 AstrMessageEvent。
+        """
+        ctx = getattr(event_or_context, "context", None)
+        if ctx is not None:
+            ev = getattr(ctx, "event", None)
+            if ev is not None:
+                return ev
+        return event_or_context
 
     async def initialize(self):
         """插件初始化时启动后台 worker。"""
@@ -284,12 +298,13 @@ class AutoReadPlugin(Star):
     # ==================================================================
 
     @filter.llm_tool(name="autoread_list_books")
-    async def autoread_list_books(self, event: AstrMessageEvent):
+    async def autoread_list_books(self, _event_or_ctx):
         """列出当前可供持续阅读的书籍。
 
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -297,12 +312,13 @@ class AutoReadPlugin(Star):
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_choose_book")
-    async def autoread_choose_book(self, event: AstrMessageEvent, preference: str = ""):
+    async def autoread_choose_book(self, _event_or_ctx, preference: str = ""):
         """根据当前角色兴趣和用户给出的偏好，从已导入书籍中选择一本想读的书。该工具只选择书，不会自动开始阅读。
 
         Args:
             preference(string): 用户或角色表达的阅读偏好，例如"童话""科幻""哲学""轻松一点""你自己感兴趣的"。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -312,7 +328,7 @@ class AutoReadPlugin(Star):
 
     @filter.llm_tool(name="autoread_start_book")
     async def autoread_start_book(
-        self, event: AstrMessageEvent, book_id: str, interval_minutes: float = 1440
+        self, _event_or_ctx, book_id: str, interval_minutes: float = 1440
     ):
         """开始持续阅读一本已导入的书，并绑定当前会话用于后续主动分享。
 
@@ -320,6 +336,7 @@ class AutoReadPlugin(Star):
             book_id(string): 要开始阅读的书籍 ID，必须来自 autoread_list_books 或 autoread_choose_book 的结果。
             interval_minutes(number): 阅读间隔，单位分钟。默认 1440 分钟，即每天一次。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -332,7 +349,7 @@ class AutoReadPlugin(Star):
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_read_next")
-    async def autoread_read_next(self, event: AstrMessageEvent, reason: str = ""):
+    async def autoread_read_next(self, _event_or_ctx, reason: str = ""):
         """读取当前书的下一段文本，生成阶段性读书笔记，并推进阅读进度。
 
         注意：工具返回的是内部结构化阅读结果。你必须把结果转化为符合当前人格的自然表达，
@@ -342,6 +359,7 @@ class AutoReadPlugin(Star):
         Args:
             reason(string): 本次主动阅读的原因，例如"用户问我最近读到哪里了""我想继续读一点""定时任务触发"。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -358,7 +376,7 @@ class AutoReadPlugin(Star):
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_get_status")
-    async def autoread_get_status(self, event: AstrMessageEvent):
+    async def autoread_get_status(self, _event_or_ctx):
         """查看当前会话的持续阅读状态。
 
         注意：工具返回的是内部状态数据。你必须把结果转化为自然表达，
@@ -367,6 +385,7 @@ class AutoReadPlugin(Star):
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -375,7 +394,7 @@ class AutoReadPlugin(Star):
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_get_notes")
-    async def autoread_get_notes(self, event: AstrMessageEvent, limit: float = 5):
+    async def autoread_get_notes(self, _event_or_ctx, limit: float = 5):
         """查看当前书最近的持续阅读笔记。
 
         注意：工具返回的是内部结构化笔记数据。你必须把结果转化为符合当前人格的自然表达，
@@ -385,6 +404,7 @@ class AutoReadPlugin(Star):
         Args:
             limit(number): 返回最近多少条笔记，默认 5 条。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -393,12 +413,13 @@ class AutoReadPlugin(Star):
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_pause")
-    async def autoread_pause(self, event: AstrMessageEvent):
+    async def autoread_pause(self, _event_or_ctx):
         """暂停当前会话的后台持续阅读。
 
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -406,12 +427,13 @@ class AutoReadPlugin(Star):
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_resume")
-    async def autoread_resume(self, event: AstrMessageEvent):
+    async def autoread_resume(self, _event_or_ctx):
         """恢复当前会话的后台持续阅读。
 
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
@@ -419,12 +441,13 @@ class AutoReadPlugin(Star):
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_stop")
-    async def autoread_stop(self, event: AstrMessageEvent):
+    async def autoread_stop(self, _event_or_ctx):
         """停止当前阅读任务，但保留历史笔记。
 
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
+        event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
