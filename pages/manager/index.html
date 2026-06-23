@@ -251,45 +251,39 @@ tr:hover td { background: rgba(0,0,0,0.02); }
       <fieldset><legend>模型设置</legend>
         <p class="hint" style="margin-bottom:12px">提供商请通过插件原生设置页选择。下方为当前已保存的模型配置。</p>
 
-        <label><span>模型策略</span><select name="reading_model_strategy" id="setting-model-strategy">
-          <option value="two_stage">双模型分工</option>
-          <option value="fixed_single">单模型</option>
+        <label><span>模型策略</span><select name="model_strategy" id="setting-model-strategy">
+          <option value="dual">双模型</option>
+          <option value="single">单模型</option>
           <option value="current_session">当前会话</option>
         </select></label>
 
-        <div id="setting-two-stage-group" class="setting-group">
-          <label><span>低成本模型 ID</span><input type="text" id="display-cheap-provider" readonly style="background:var(--panel);color:var(--muted)" /></label>
-          <label><span>高质量模型 ID</span><input type="text" id="display-quality-provider" readonly style="background:var(--panel);color:var(--muted)" /></label>
+        <div id="setting-dual-group" class="setting-group">
+          <label><span>阅读模型 ID</span><input type="text" id="display-reader-provider" readonly style="background:var(--panel);color:var(--muted)" /></label>
+          <label><span>思考模型 ID</span><input type="text" id="display-thinker-provider" readonly style="background:var(--panel);color:var(--muted)" /></label>
         </div>
 
         <div id="setting-single-group" class="setting-group" hidden>
-          <label><span>阅读模型 ID</span><input type="text" id="display-single-provider" readonly style="background:var(--panel);color:var(--muted)" /></label>
+          <label><span>单模型 ID</span><input type="text" id="display-single-provider" readonly style="background:var(--panel);color:var(--muted)" /></label>
         </div>
 
-        <!-- 隐藏的实际 provider_id 字段（同步自原生设置页） -->
-        <input type="hidden" name="cheap_provider_id" id="hidden-cheap-provider-id" />
-        <input type="hidden" name="quality_provider_id" id="hidden-quality-provider-id" />
+        <input type="hidden" name="reader_provider_id" id="hidden-reader-provider-id" />
+        <input type="hidden" name="thinker_provider_id" id="hidden-thinker-provider-id" />
         <input type="hidden" name="single_provider_id" id="hidden-single-provider-id" />
 
-        <label><span>片段模型</span><select name="chunk_note_model_role">
-          <option value="cheap">低成本</option><option value="quality">高质量</option><option value="current_session">当前会话</option>
-        </select></label>
-        <label><span>章节模型</span><select name="chapter_note_model_role">
-          <option value="cheap">低成本</option><option value="quality">高质量</option><option value="current_session">当前会话</option>
-        </select></label>
-        <label><span>重要内容模型</span><select name="important_note_model_role">
-          <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
-        </select></label>
-        <label><span>全书总结模型</span><select name="final_review_model_role">
-          <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
-        </select></label>
-        <label><span>记忆沉淀模型</span><select name="memory_note_model_role">
-          <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
-        </select></label>
-        <label><span>重要性阈值</span><input type="number" name="pro_upgrade_importance_threshold" min="0" max="1" step="0.05" /></label>
+        <label><span>自定义阶段模型</span><input type="checkbox" name="enable_stage_routing" id="setting-enable-stage-routing" /></label>
+        <div id="setting-stage-routing-group" class="setting-group" hidden>
+          <p class="hint">留空时使用默认分工（阅读/思考）。</p>
+          <label><span>片段阅读模型</span><input type="text" name="stage_chunk_note_provider_id" maxlength="200" /></label>
+          <label><span>片段复核模型</span><input type="text" name="stage_chunk_review_provider_id" maxlength="200" /></label>
+          <label><span>章节总结模型</span><input type="text" name="stage_chapter_note_provider_id" maxlength="200" /></label>
+          <label><span>全书总结模型</span><input type="text" name="stage_final_review_provider_id" maxlength="200" /></label>
+          <label><span>记忆沉淀模型</span><input type="text" name="stage_memory_note_provider_id" maxlength="200" /></label>
+          <label><span>重要分享模型</span><input type="text" name="stage_user_share_provider_id" maxlength="200" /></label>
+        </div>
+
         <label><span>深入复核</span><input type="checkbox" name="enable_deeper_review" /></label>
-        <label><span>每章复核上限</span><input type="number" name="max_deeper_reviews_per_chapter" min="0" max="20" /></label>
-        <label><span>不可用时回退</span><input type="checkbox" name="fallback_to_current_session_provider" /></label>
+        <label><span>重要性阈值</span><input type="number" name="importance_threshold" min="0" max="1" step="0.05" /></label>
+        <label><span>每章复核上限</span><input type="number" name="max_reviews_per_chapter" min="0" max="20" /></label>
       </fieldset>
 
       <fieldset><legend>页面设置</legend>
@@ -547,7 +541,7 @@ function renderNotesTable(items) {
     return '<tr><td>' + formatTime(n.created_at) + '</td><td>' + escapeHtml(n.book_title) + '</td>' +
       '<td>' + escapeHtml(n.chapter_title || n.chapter || "") + '</td><td>' + (n.chunk_index || 0) + '</td>' +
       '<td><span class="badge" style="font-size:10px">' + escapeHtml(n.record_type || "chunk_note") + '</span></td>' +
-      '<td>' + escapeHtml(n.model_role || n.provider_display_name || "-") + '</td>' +
+      '<td>' + escapeHtml(n.stage || n.provider_id || "-") + '</td>' +
       '<td>' + (n.importance_score || 0).toFixed(2) + (n.needs_deeper_review ? " *" : "") + '</td>' +
       '<td class="wrap">' + escapeHtml(truncate(n.summary || "", 50)) + '</td>' +
       '<td><button class="btn btn-small btn-secondary" data-action="note-detail" data-book-id="' + escapeHtml(n.book_id) + '" data-note-id="' + escapeHtml(n.note_id || n.record_id || "") + '">查看</button></td></tr>';
@@ -573,8 +567,8 @@ function renderNoteDetail(data) {
     '<dt>段索引</dt><dd>' + (data.chunk_index || 0) + ' / ' + (data.chunk_total || "?") + '</dd>' +
     '<dt>章节</dt><dd>' + escapeHtml(data.chapter_title || data.chapter || "") + '</dd>' +
     '<dt>重要性</dt><dd>' + (data.importance_score || 0).toFixed(2) + (data.needs_deeper_review ? " (需复核)" : "") + '</dd>' +
-    '<dt>模型角色</dt><dd>' + escapeHtml(mu.model_role || data.model_role || "-") + '</dd>' +
-    '<dt>模型名称</dt><dd>' + escapeHtml(mu.provider_display_name || data.provider_display_name || "-") + '</dd>' +
+    '<dt>阶段</dt><dd>' + escapeHtml(mu.stage || data.stage || "-") + '</dd>' +
+    '<dt>Provider</dt><dd>' + escapeHtml(mu.provider_id || data.provider_id || "-") + '</dd>' +
     '<dt>创建时间</dt><dd>' + formatTime(data.created_at) + '</dd>' +
     '<dt>标签</dt><dd>' + ((data.tags || []).join(", ") || "-") + '</dd></dl>' +
     '<div class="field-block"><h4>摘要</h4><p>' + escapeHtml(data.summary) + '</p></div>' +
@@ -630,30 +624,33 @@ function renderSettings(settings) {
   });
 
   // 显示只读 provider_id
-  var cheapPid = flat.cheap_provider_id || "";
-  var qualityPid = flat.quality_provider_id || "";
+  var readerPid = flat.reader_provider_id || "";
+  var thinkerPid = flat.thinker_provider_id || "";
   var singlePid = flat.single_provider_id || "";
-  var dCheap = document.getElementById("display-cheap-provider");
-  var dQuality = document.getElementById("display-quality-provider");
+  var dReader = document.getElementById("display-reader-provider");
+  var dThinker = document.getElementById("display-thinker-provider");
   var dSingle = document.getElementById("display-single-provider");
-  if (dCheap) dCheap.value = cheapPid || "(未设置)";
-  if (dQuality) dQuality.value = qualityPid || "(未设置)";
+  if (dReader) dReader.value = readerPid || "(未设置)";
+  if (dThinker) dThinker.value = thinkerPid || "(未设置)";
   if (dSingle) dSingle.value = singlePid || "(未设置)";
-  // 同步隐藏字段
-  var hCheap = document.getElementById("hidden-cheap-provider-id");
-  var hQuality = document.getElementById("hidden-quality-provider-id");
+  var hReader = document.getElementById("hidden-reader-provider-id");
+  var hThinker = document.getElementById("hidden-thinker-provider-id");
   var hSingle = document.getElementById("hidden-single-provider-id");
-  if (hCheap) hCheap.value = cheapPid;
-  if (hQuality) hQuality.value = qualityPid;
+  if (hReader) hReader.value = readerPid;
+  if (hThinker) hThinker.value = thinkerPid;
   if (hSingle) hSingle.value = singlePid;
 
-  updateModelStrategyUI(flat.reading_model_strategy || "two_stage");
+  // 阶段路由组显示
+  var stageRouting = document.getElementById("setting-stage-routing-group");
+  if (stageRouting) stageRouting.hidden = !flat.enable_stage_routing;
+
+  updateModelStrategyUI(flat.model_strategy || "dual");
 }
 function updateModelStrategyUI(strategy) {
-  var two = document.getElementById("setting-two-stage-group");
+  var dual = document.getElementById("setting-dual-group");
   var single = document.getElementById("setting-single-group");
-  if (two) two.hidden = strategy !== "two_stage";
-  if (single) single.hidden = strategy !== "fixed_single";
+  if (dual) dual.hidden = strategy !== "dual";
+  if (single) single.hidden = strategy !== "single";
 }
 
 function saveSettings() {
@@ -694,15 +691,19 @@ function getGroupForKey(key) {
     chunk_size: "Reading_Settings", chunk_overlap: "Reading_Settings",
     reading_persona_prompt: "Reading_Settings", max_notes_per_book: "Reading_Settings",
     allow_url_import: "Reading_Settings", memory_backend: "Reading_Settings",
-    reading_model_strategy: "Model_Settings",
-    cheap_provider_id: "Model_Settings", quality_provider_id: "Model_Settings",
+    model_strategy: "Model_Settings",
+    reader_provider_id: "Model_Settings", thinker_provider_id: "Model_Settings",
     single_provider_id: "Model_Settings",
-    chunk_note_model_role: "Model_Settings", chapter_note_model_role: "Model_Settings",
-    important_note_model_role: "Model_Settings", final_review_model_role: "Model_Settings",
-    memory_note_model_role: "Model_Settings",
-    pro_upgrade_importance_threshold: "Model_Settings",
-    enable_deeper_review: "Model_Settings", max_deeper_reviews_per_chapter: "Model_Settings",
-    fallback_to_current_session_provider: "Model_Settings",
+    enable_stage_routing: "Model_Settings",
+    stage_chunk_note_provider_id: "Model_Settings",
+    stage_chunk_review_provider_id: "Model_Settings",
+    stage_chapter_note_provider_id: "Model_Settings",
+    stage_final_review_provider_id: "Model_Settings",
+    stage_memory_note_provider_id: "Model_Settings",
+    stage_user_share_provider_id: "Model_Settings",
+    enable_deeper_review: "Model_Settings",
+    importance_threshold: "Model_Settings",
+    max_reviews_per_chapter: "Model_Settings",
     webui_enabled: "WebUI_Settings", webui_upload_enabled: "WebUI_Settings",
     webui_max_upload_mb: "WebUI_Settings", webui_allow_book_delete: "WebUI_Settings",
     webui_notes_export_enabled: "WebUI_Settings",
@@ -757,6 +758,10 @@ document.querySelectorAll(".tab-btn").forEach(function(btn) {
 
 document.getElementById("setting-model-strategy").addEventListener("change", function(e) {
   updateModelStrategyUI(e.target.value);
+});
+document.getElementById("setting-enable-stage-routing").addEventListener("change", function(e) {
+  var grp = document.getElementById("setting-stage-routing-group");
+  if (grp) grp.hidden = !e.target.checked;
 });
 document.getElementById("settings-form").addEventListener("submit", function(e) {
   e.preventDefault(); saveSettings();

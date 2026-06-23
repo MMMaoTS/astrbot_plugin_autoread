@@ -19,20 +19,11 @@ RECORD_TYPES = frozenset({
     "memory_note",
 })
 
-# model_role 允许值
-MODEL_ROLES = frozenset({
-    "cheap",
-    "quality",
-    "current_session",
-    "default",
-})
-
 # 阅读阶段
 STAGES = frozenset({
     "chunk_note",
     "chunk_review",
     "chapter_note",
-    "important_chapter_note",
     "book_note",
     "user_visible_share",
     "final_review",
@@ -128,18 +119,16 @@ def new_record(
 
 def model_usage_info(
     *,
-    strategy: str = "two_stage",
-    model_role: str = "cheap",
+    strategy: str = "dual",
     provider_id: str = "",
-    provider_display_name: str = "",
     stage: str = "chunk_note",
+    stage_routing_enabled: bool = False,
 ) -> dict:
     return {
         "strategy": strategy,
-        "model_role": model_role,
         "provider_id": provider_id,
-        "provider_display_name": provider_display_name,
         "stage": stage,
+        "stage_routing_enabled": stage_routing_enabled,
     }
 
 

@@ -86,23 +86,24 @@
     "type": "object",
     "description": "模型设置",
     "items": {
-      "reading_model_strategy": {
+      "model_strategy": {
         "type": "string",
         "description": "模型策略",
-        "options": ["current_session", "fixed_single", "two_stage"],
-        "default": "two_stage"
+        "options": ["current_session", "single", "dual"],
+        "labels": ["当前会话", "单模型", "双模型"],
+        "default": "dual"
       },
-      "cheap_provider_id": {
+      "reader_provider_id": {
         "type": "string",
-        "description": "低成本模型",
-        "hint": "用于高频片段阅读。",
+        "description": "阅读模型",
+        "hint": "用于日常阅读和片段笔记。",
         "_special": "select_provider",
         "default": ""
       },
-      "quality_provider_id": {
+      "thinker_provider_id": {
         "type": "string",
-        "description": "高质量模型",
-        "hint": "用于章节总结和重要看法。",
+        "description": "思考模型",
+        "hint": "用于总结、复核和重要看法。",
         "_special": "select_provider",
         "default": ""
       },
@@ -113,57 +114,71 @@
         "_special": "select_provider",
         "default": ""
       },
-      "chunk_note_model_role": {
-        "type": "string",
-        "description": "片段模型",
-        "options": ["cheap", "quality", "current_session", "default"],
-        "default": "cheap"
+      "enable_stage_routing": {
+        "type": "bool",
+        "description": "自定义阶段模型",
+        "hint": "开启后可为各阅读阶段单独选择模型。",
+        "default": false
       },
-      "chapter_note_model_role": {
+      "stage_chunk_note_provider_id": {
         "type": "string",
-        "description": "章节模型",
-        "options": ["cheap", "quality", "current_session", "default"],
-        "default": "cheap"
+        "description": "片段阅读模型",
+        "hint": "仅在自定义阶段模型开启时生效。留空则使用阅读模型。",
+        "_special": "select_provider",
+        "default": ""
       },
-      "important_note_model_role": {
+      "stage_chunk_review_provider_id": {
         "type": "string",
-        "description": "重要内容模型",
-        "options": ["cheap", "quality", "current_session", "default"],
-        "default": "quality"
+        "description": "片段复核模型",
+        "hint": "仅在自定义阶段模型开启时生效。留空则使用思考模型。",
+        "_special": "select_provider",
+        "default": ""
       },
-      "final_review_model_role": {
+      "stage_chapter_note_provider_id": {
+        "type": "string",
+        "description": "章节总结模型",
+        "hint": "仅在自定义阶段模型开启时生效。留空则使用思考模型。",
+        "_special": "select_provider",
+        "default": ""
+      },
+      "stage_final_review_provider_id": {
         "type": "string",
         "description": "全书总结模型",
-        "options": ["cheap", "quality", "current_session", "default"],
-        "default": "quality"
+        "hint": "仅在自定义阶段模型开启时生效。留空则使用思考模型。",
+        "_special": "select_provider",
+        "default": ""
       },
-      "memory_note_model_role": {
+      "stage_memory_note_provider_id": {
         "type": "string",
         "description": "记忆沉淀模型",
-        "options": ["cheap", "quality", "current_session", "default"],
-        "default": "quality"
+        "hint": "仅在自定义阶段模型开启时生效。留空则使用思考模型。",
+        "_special": "select_provider",
+        "default": ""
       },
-      "pro_upgrade_importance_threshold": {
-        "type": "float",
-        "description": "重要性阈值",
-        "hint": "升级高质量模型的分数阈值。",
-        "default": 0.75
+      "stage_user_share_provider_id": {
+        "type": "string",
+        "description": "重要分享模型",
+        "hint": "仅在自定义阶段模型开启时生效。留空则使用思考模型。",
+        "_special": "select_provider",
+        "default": ""
       },
       "enable_deeper_review": {
         "type": "bool",
         "description": "深入复核",
+        "hint": "重要片段使用复核模型再读一次。",
         "default": true
       },
-      "max_deeper_reviews_per_chapter": {
+      "importance_threshold": {
+        "type": "float",
+        "description": "重要性阈值",
+        "hint": "超过该分数后触发复核。",
+        "default": 0.75
+      },
+      "max_reviews_per_chapter": {
         "type": "int",
         "description": "每章复核上限",
-        "hint": "0-20。",
+        "hint": "限制每章最多复核次数。",
         "default": 3
-      },
-      "fallback_to_current_session_provider": {
-        "type": "bool",
-        "description": "不可用时回退",
-        "default": true
       }
     }
   },

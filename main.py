@@ -48,10 +48,7 @@ class AutoReadPlugin(Star):
         (self.data_dir / "notes").mkdir(exist_ok=True)
 
         # 配置服务（以 AstrBotConfig 为唯一主配置源）
-        self.config_service = ConfigService(
-            config=self.config,
-            data_dir=self.data_dir,
-        )
+        self.config_service = ConfigService(config=self.config)
 
         # Provider 解析器
         self.provider_resolver = ProviderResolver(
@@ -80,7 +77,6 @@ class AutoReadPlugin(Star):
             context=self.context,
             config_service=self.config_service,
             provider_resolver=self.provider_resolver,
-            model_router=self.model_router,
         )
         self.memory_bridge = MemoryBridge(
             backend=self.config_service.get("memory_backend", "none"),

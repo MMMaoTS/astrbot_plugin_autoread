@@ -412,18 +412,12 @@ class WebUIService:
                 "tags": n.get("tags", []),
                 "importance_score": n.get("importance_score", 0.0),
                 "needs_deeper_review": n.get("needs_deeper_review", False),
-                "model_role": mu.get("model_role", ""),
-                "provider_display_name": mu.get("provider_display_name", ""),
+                "provider_id": mu.get("provider_id", ""),
                 "stage": mu.get("stage", ""),
+                "strategy": mu.get("strategy", ""),
                 "created_at": n.get("created_at", ""),
-                # 兼容旧 note_id
                 "note_id": n.get("record_id", n.get("note_id", "")),
                 "chapter": n.get("chapter_title", n.get("chapter", "")),
-                "should_share": bool(
-                    n.get("share_message", "").strip() and
-                    (float(n.get("importance_score", 0)) >= 0.5 or
-                     bool(n.get("needs_deeper_review", False)))
-                ),
             })
 
         return {
@@ -470,12 +464,11 @@ class WebUIService:
             "parent_record_ids": n.get("parent_record_ids", []),
             "model_usage": mu,
             "created_at": n.get("created_at", ""),
-            # 兼容旧字段
             "note_id": n.get("record_id", n.get("note_id", "")),
             "chapter": n.get("chapter_title", n.get("chapter", "")),
-            "should_share": bool(n.get("share_message", "").strip()),
-            "model_role": mu.get("model_role", ""),
-            "provider_display_name": mu.get("provider_display_name", ""),
+            "provider_id": mu.get("provider_id", ""),
+            "stage": mu.get("stage", ""),
+            "strategy": mu.get("strategy", ""),
         }
 
     async def export_notes(self, book_id: str = "") -> Path | None:

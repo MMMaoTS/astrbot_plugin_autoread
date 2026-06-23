@@ -83,11 +83,10 @@ class NoteWriter:
     输出格式: 统一 ReadingRecord
     """
 
-    def __init__(self, context, config_service, provider_resolver, model_router):
+    def __init__(self, context, config_service, provider_resolver):
         self.context = context
         self.config_service = config_service
         self.provider_resolver = provider_resolver
-        self.model_router = model_router
 
     async def write_note(
         self,
@@ -100,7 +99,7 @@ class NoteWriter:
     ) -> dict:
         """生成 chunk_note ReadingRecord。
 
-        流程: ModelRouter.select_model_role -> ProviderResolver.resolve_provider_id -> LLM
+        流程: ProviderResolver.resolve_provider_id(stage="chunk_note") -> LLM
 
         Returns:
             ReadingRecord dict (record_type="chunk_note")
@@ -116,17 +115,14 @@ class NoteWriter:
             persona_prompt=persona,
         )
 
-        # 模型路由
-        model_role = await self.model_router.select_model_role(
-            stage="chunk_note",
-        )
-        strategy = self.config_service.get("reading_model_strategy", "two_stage")
+        strategy = self.config_service.get("model_strategy", "dual")
+        stage_routing = self.config_service.get("enable_stage_routing", False)
+        stage = "chunk_note"
 
         try:
             provider_id = await self.provider_resolver.resolve_provider_id(
                 umo=umo,
-                model_role=model_role,
-                stage="chunk_note",
+                stage=stage,
             )
             if not provider_id:
                 raise RuntimeError(
@@ -140,17 +136,16 @@ class NoteWriter:
             )
             raw_text = llm_resp.completion_text
             logger.info(
-                f"[AutoRead] LLM note response length: {len(raw_text)} "
-                f"(role={model_role}, provider={provider_id})"
+                f"[AutoRead] LLM note: len={len(raw_text)} "
+                f"provider={provider_id} stage={stage} strategy={strategy}"
             )
 
             parsed = self._parse_json(raw_text)
             mu = model_usage_info(
                 strategy=strategy,
-                model_role=model_role,
                 provider_id=provider_id,
-                provider_display_name=self._provider_display_name(model_role),
-                stage="chunk_note",
+                stage=stage,
+                stage_routing_enabled=stage_routing,
             )
 
             record = new_record(
@@ -176,21 +171,14 @@ class NoteWriter:
             return record
 
         except Exception as exc:
-            logger.warning(f"[AutoRead] LLM call failed, using fallback note: {exc}")
+            logger.warning(f"[AutoRead] LLM call failed, using fallback: {exc}")
             return self._fallback_record(
-                book_id, book_title, chunk, chunk_index, chunk_total, strategy
+                book_id, book_title, chunk, chunk_index, chunk_total, strategy, stage_routing
             )
 
     # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------
-
-    def _provider_display_name(self, model_role: str) -> str:
-        if model_role == "cheap":
-            return self.config_service.get("cheap_provider_display_name", "")
-        elif model_role == "quality":
-            return self.config_service.get("quality_provider_display_name", "")
-        return ""
 
     @staticmethod
     def _parse_json(raw_text: str) -> dict:
@@ -221,6 +209,7 @@ class NoteWriter:
         chunk_index: int,
         chunk_total: int,
         strategy: str,
+        stage_routing: bool = False,
     ) -> dict:
         text_snippet = chunk.get("text", "")[:200]
         return new_record(
@@ -240,9 +229,8 @@ class NoteWriter:
             needs_deeper_review=False,
             model_usage=model_usage_info(
                 strategy=strategy,
-                model_role="cheap",
-                provider_id="",
-                provider_display_name="(fallback)",
+                provider_id="(fallback)",
                 stage="chunk_note",
+                stage_routing_enabled=stage_routing,
             ),
         )
