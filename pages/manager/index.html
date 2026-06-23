@@ -231,6 +231,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 <div data-tab-panel="settings" class="tab-content" hidden>
   <section class="settings-panel">
     <h2>插件设置</h2>
+    <div id="settings-error" class="messages error" hidden></div>
     <form id="settings-form" class="settings-form">
 
       <fieldset><legend>基础设置</legend>
@@ -430,7 +431,7 @@ function showTab(tabName) {
   document.querySelectorAll("[data-tab-panel]").forEach(function(panel) {
     panel.hidden = panel.dataset.tabPanel !== tabName;
   });
-  if (tabName === "settings") { loadSettings(); }
+  if (tabName === "settings") { loadSettings(); loadProviders(); }
 }
 
 // ======================================================================
@@ -634,9 +635,25 @@ function updateNotesBookFilter(bookItems) {
 // Settings
 // ======================================================================
 function loadSettings() {
+  var form = document.getElementById("settings-form");
+  var errPanel = document.getElementById("settings-error");
   return apiGet("settings").then(function(data) {
+    enableSettingsForm(true);
+    if (errPanel) errPanel.hidden = true;
     renderSettings(data.settings);
-  }).catch(function(err) { showError("加载设置失败: " + err.message); });
+  }).catch(function(err) {
+    enableSettingsForm(false);
+    if (errPanel) {
+      errPanel.hidden = false;
+      errPanel.textContent = "WebUI 后端接口不可用，请检查插件日志。错误: " + (err.message || "未知错误");
+    }
+    showError("加载设置失败: " + err.message);
+  });
+}
+function enableSettingsForm(enabled) {
+  var form = document.getElementById("settings-form");
+  var controls = form.querySelectorAll("input, select, textarea, button[type=submit]");
+  controls.forEach(function(el) { el.disabled = !enabled; });
 }
 function renderSettings(settings) {
   var form = document.getElementById("settings-form");

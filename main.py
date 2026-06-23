@@ -134,7 +134,7 @@ class AutoReadPlugin(Star):
 
     async def initialize(self):
         """插件初始化时启动后台 worker。"""
-        if self.config.get("enabled", True):
+        if self.config_service.get("enabled", True):
             self._worker_task = asyncio.create_task(self.worker.run())
             logger.info("[AutoRead] Plugin initialized, worker started")
 
