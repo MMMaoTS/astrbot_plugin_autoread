@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoRead 管理</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>AutoRead 管理</h1>
+      <button id="btn-refresh" class="btn btn-secondary" title="刷新所有数据">刷新</button>
+    </header>
+
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="overview">总览</button>
+      <button class="tab-btn" data-tab="books">书籍</button>
+      <button class="tab-btn" data-tab="reading">阅读任务</button>
+      <button class="tab-btn" data-tab="notes">笔记</button>
+      <button class="tab-btn" data-tab="settings">设置</button>
+    </nav>
+
+    <section id="messages" class="messages" hidden></section>
+
+    <!-- ============ 总览 ============ -->
+    <div data-tab-panel="overview" class="tab-content">
+      <section id="overview-panel" class="overview">
+        <h2>总览</h2>
+        <div class="overview-cards">
+          <div class="card">
+            <span class="card-value" id="ov-books">-</span>
+            <span class="card-label">书籍</span>
+          </div>
+          <div class="card">
+            <span class="card-value" id="ov-notes">-</span>
+            <span class="card-label">笔记</span>
+          </div>
+          <div class="card">
+            <span class="card-value" id="ov-active">-</span>
+            <span class="card-label">活跃阅读</span>
+          </div>
+          <div class="card card-error" id="ov-error-card" hidden>
+            <span class="card-value" id="ov-error">-</span>
+            <span class="card-label">最后错误</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ 书籍 ============ -->
+    <div data-tab-panel="books" class="tab-content" hidden>
+      <section id="upload" class="upload">
+        <h2>上传书籍</h2>
+        <div class="upload-row">
+          <input type="file" id="upload-input" accept=".txt,.md" />
+          <button id="btn-upload" class="btn btn-primary">上传并导入</button>
+        </div>
+        <p class="hint">仅支持 .txt / .md 文件，最大 10 MB。上传后自动导入并切片。</p>
+      </section>
+
+      <section id="books-list" class="books">
+        <h2>书籍管理</h2>
+        <div class="toolbar">
+          <input type="text" id="books-search" placeholder="搜索书名或 book_id..." />
+          <button id="btn-books-search" class="btn btn-secondary">搜索</button>
+        </div>
+        <div class="table-wrap">
+          <table id="books-table">
+            <thead>
+              <tr>
+                <th>书名</th>
+                <th>book_id</th>
+                <th>字符数</th>
+                <th>切片数</th>
+                <th>笔记数</th>
+                <th>活跃</th>
+                <th>进度</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="books-tbody"></tbody>
+          </table>
+        </div>
+        <div class="pagination" id="books-pagination"></div>
+      </section>
+    </div>
+
+    <!-- ============ 阅读任务 ============ -->
+    <div data-tab-panel="reading" class="tab-content" hidden>
+      <section id="sessions" class="sessions">
+        <h2>当前阅读任务</h2>
+        <div class="table-wrap">
+          <table id="sessions-table">
+            <thead>
+              <tr>
+                <th>会话</th>
+                <th>书名</th>
+                <th>进度</th>
+                <th>状态</th>
+                <th>上次阅读</th>
+                <th>下次阅读</th>
+              </tr>
+            </thead>
+            <tbody id="sessions-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ 笔记 ============ -->
+    <div data-tab-panel="notes" class="tab-content" hidden>
+      <section id="notes-panel" class="notes">
+        <h2>阅读笔记 <span class="badge">只读</span></h2>
+        <div class="toolbar">
+          <select id="notes-book-filter">
+            <option value="">全部书籍</option>
+          </select>
+          <input type="text" id="notes-keyword" placeholder="关键词搜索..." />
+          <button id="btn-notes-search" class="btn btn-secondary">搜索</button>
+        </div>
+        <div class="table-wrap">
+          <table id="notes-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>书名</th>
+                <th>章节</th>
+                <th>段</th>
+                <th>类型</th>
+                <th>模型</th>
+                <th>重要性</th>
+                <th>摘要</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="notes-tbody"></tbody>
+          </table>
+        </div>
+        <div class="pagination" id="notes-pagination"></div>
+      </section>
+    </div>
+
+    <!-- ============ 设置 ============ -->
+    <div data-tab-panel="settings" class="tab-content" hidden>
+      <section id="settings-panel" class="settings-panel">
+        <h2>插件设置</h2>
+        <form id="settings-form" class="settings-form">
+          <fieldset>
+            <legend>基础设置</legend>
+            <label><span>启用插件</span><input type="checkbox" name="enabled" /></label>
+            <label><span>默认阅读间隔（分钟）</span><input type="number" name="default_interval_minutes" min="1" max="10080" /></label>
+            <label><span>Worker 扫描间隔（秒）</span><input type="number" name="worker_tick_seconds" min="10" max="3600" /></label>
+            <label><span>主动分享模式</span><select name="auto_share_mode">
+              <option value="none">不分享</option>
+              <option value="daily">每日</option>
+              <option value="chapter">按章节</option>
+              <option value="every_step">每段</option>
+              <option value="finish">读完</option>
+            </select></label>
+          </fieldset>
+
+          <fieldset>
+            <legend>阅读设置</legend>
+            <label><span>每次阅读字符数</span><input type="number" name="chunk_size" min="100" max="50000" /></label>
+            <label><span>切片重叠字符数</span><input type="number" name="chunk_overlap" min="0" max="5000" /></label>
+            <label><span>角色可见阅读提示词</span><textarea name="reading_persona_prompt" rows="4" maxlength="4000"></textarea></label>
+          </fieldset>
+
+          <fieldset>
+            <legend>阅读模型分工设置</legend>
+            <label><span>模型策略</span><select name="reading_model_strategy" id="setting-model-strategy">
+              <option value="two_stage">双模型分工</option>
+              <option value="fixed_single">单模型</option>
+              <option value="current_session">当前会话</option>
+            </select></label>
+
+            <div id="setting-two-stage-group" class="setting-group">
+              <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">低成本模型 (cheap) — 高频 chunk 阅读</h4>
+              <label><span>Provider ID</span><input type="text" name="cheap_provider_id" maxlength="200" id="setting-cheap-provider-id" /></label>
+              <label><span>显示名称</span><input type="text" name="cheap_provider_display_name" maxlength="120" /></label>
+
+              <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">高质量模型 (quality) — 章节总结、重要分享、全书总结</h4>
+              <label><span>Provider ID</span><input type="text" name="quality_provider_id" maxlength="200" id="setting-quality-provider-id" /></label>
+              <label><span>显示名称</span><input type="text" name="quality_provider_display_name" maxlength="120" /></label>
+
+              <div class="provider-list-section">
+                <h4>可用模型列表</h4>
+                <button type="button" id="btn-refresh-providers" class="btn btn-small btn-secondary">刷新模型列表</button>
+                <div id="provider-list" class="provider-list"></div>
+                <p class="hint" id="provider-hint" hidden>当前运行环境未提供可用模型列表接口，请手动填写 provider_id。</p>
+              </div>
+            </div>
+
+            <div id="setting-single-group" class="setting-group" hidden>
+              <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">单模型配置</h4>
+              <label><span>Provider ID</span><input type="text" name="single_provider_id" maxlength="200" /></label>
+              <label><span>显示名称</span><input type="text" name="single_provider_display_name" maxlength="120" /></label>
+            </div>
+
+            <h4 style="margin:8px 0;font-size:13px;color:var(--muted)">各阶段模型角色分配</h4>
+            <label><span>chunk 阅读使用</span><select name="chunk_note_model_role">
+              <option value="cheap">低成本</option>
+              <option value="quality">高质量</option>
+              <option value="current_session">当前会话</option>
+            </select></label>
+            <label><span>章节总结使用</span><select name="chapter_note_model_role">
+              <option value="cheap">低成本</option>
+              <option value="quality">高质量</option>
+              <option value="current_session">当前会话</option>
+            </select></label>
+            <label><span>重要总结使用</span><select name="important_note_model_role">
+              <option value="quality">高质量</option>
+              <option value="cheap">低成本</option>
+              <option value="current_session">当前会话</option>
+            </select></label>
+            <label><span>全书总结使用</span><select name="final_review_model_role">
+              <option value="quality">高质量</option>
+              <option value="cheap">低成本</option>
+              <option value="current_session">当前会话</option>
+            </select></label>
+            <label><span>记忆沉淀使用</span><select name="memory_note_model_role">
+              <option value="quality">高质量</option>
+              <option value="cheap">低成本</option>
+              <option value="current_session">当前会话</option>
+            </select></label>
+            <label><span>重要性升级阈值</span><input type="number" name="pro_upgrade_importance_threshold" min="0" max="1" step="0.05" /></label>
+            <label><span>启用深入复核</span><input type="checkbox" name="enable_deeper_review" /></label>
+            <label><span>每章最多复核次数</span><input type="number" name="max_deeper_reviews_per_chapter" min="0" max="100" /></label>
+            <label><span>不可用时回退到当前会话</span><input type="checkbox" name="fallback_to_current_session_provider" /></label>
+          </fieldset>
+
+          <!-- 旧模型配置 (兼容，隐藏) -->
+          <input type="hidden" name="reading_model_mode" value="current_session" />
+          <input type="hidden" name="reading_provider_id" value="" />
+          <input type="hidden" name="reading_provider_display_name" value="" />
+
+          <fieldset>
+            <legend>WebUI 设置</legend>
+            <label><span>允许 WebUI 上传</span><input type="checkbox" name="webui_upload_enabled" /></label>
+            <label><span>上传大小限制（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
+            <label><span>允许删除/归档</span><input type="checkbox" name="webui_allow_book_delete" /></label>
+            <label><span>允许导出笔记</span><input type="checkbox" name="webui_notes_export_enabled" /></label>
+          </fieldset>
+
+          <fieldset>
+            <legend>扩展设置</legend>
+            <label><span>允许 URL 导入</span><input type="checkbox" name="allow_url_import" /></label>
+            <label><span>记忆后端</span><select name="memory_backend">
+              <option value="none">无</option>
+              <option value="angel_memory">天使之魂</option>
+              <option value="livingmemory">LivingMemory</option>
+            </select></label>
+          </fieldset>
+
+          <div class="settings-actions">
+            <button type="submit" id="btn-save-settings" class="btn btn-primary">保存设置</button>
+            <button type="button" id="btn-reload-settings" class="btn btn-secondary">重新加载</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <!-- 书籍详情面板 -->
+    <section id="book-detail-panel" class="detail-panel" hidden>
+      <div class="detail-header">
+        <h2>书籍详情</h2>
+        <button class="btn-close" id="btn-close-book-detail">&times;</button>
+      </div>
+      <div class="detail-body" id="book-detail-body"></div>
+    </section>
+
+    <!-- 笔记详情面板 -->
+    <section id="note-detail-panel" class="detail-panel" hidden>
+      <div class="detail-header">
+        <h2>笔记详情 <span class="badge">只读</span></h2>
+        <button class="btn-close" id="btn-close-note-detail">&times;</button>
+      </div>
+      <div class="detail-body" id="note-detail-body"></div>
+    </section>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

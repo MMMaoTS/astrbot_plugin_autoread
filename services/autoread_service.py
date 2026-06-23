@@ -1,12 +1,220 @@
 """AutoRead 业务编排核心。
 
 命令入口、LLM Tool 入口、后台 worker 都必须复用本层，不得重复实现阅读逻辑。
+
+工具返回内容 vs 用户可见回复 边界:
+- source="command" (/read step 等) -> 结构化调试信息
+- source="llm_tool" -> 内部上下文，附带自然回应指令
+- source="worker" -> 自然语言分享文本
 """
 
 import json
 from pathlib import Path
 
 from astrbot.api import logger
+
+
+# ----------------------------------------------------------------
+# 格式化辅助函数
+# ----------------------------------------------------------------
+
+def _fmt_tool_header(book_title: str, chunk_index: int, total_chunks: int) -> str:
+    return (
+        f'[内部阅读结果, 请不要原样复述字段名, 用当前人格自然回应]\n'
+        f'书名: {book_title}\n'
+        f'当前进度: 第 {chunk_index + 1}/{total_chunks} 段\n'
+    )
+
+
+def _fmt_command_result(
+    book_title: str,
+    chunk_index: int,
+    total_chunks: int,
+    chapter: str,
+    note: dict,
+) -> str:
+    """给 /read step 使用的结构化调试输出。"""
+    lines = [
+        f'[BOOK] {book_title} 第 {chunk_index + 1}/{total_chunks} 段',
+        f'章节: {chapter or "未知"}',
+        f'',
+        f'摘要: {note.get("summary", "")}',
+    ]
+    if note.get("detail"):
+        lines.append(f'细节: {note.get("detail", "")}')
+    if note.get("reflection"):
+        lines.append(f'感想: {note.get("reflection", "")}')
+    if note.get("should_share"):
+        lines.append(f'分享文案: {note.get("share_message", "")}')
+    return "\n".join(lines)
+
+
+def _fmt_tool_context(
+    book_title: str,
+    chunk_index: int,
+    total_chunks: int,
+    chapter: str,
+    note: dict,
+) -> str:
+    """给 LLM Tool 使用: 结构化信息 + 自然回应指令。"""
+    lines = [
+        _fmt_tool_header(book_title, chunk_index, total_chunks),
+        f'章节: {chapter or "未知"}',
+        f'本段概括: {note.get("summary", "")}',
+        f'注意到的细节: {note.get("detail", "") or "(无)"}',
+        f'角色感受/疑问: {note.get("reflection", "") or "(无)"}',
+        f'建议自然回复素材: {note.get("share_message", "") or note.get("summary", "")}',
+        '',
+        (
+            '请根据以上内部信息，用当前人格自然回复用户。'
+            '不要输出「摘要」「细节」「反思」「书名」「进度」「章节」等字段名，'
+            '不要写成报告。'
+        ),
+        (
+            '如果本段信息不足以判断整本书，'
+            '请诚实体现「目前只读到很前面的部分」。'
+        ),
+        '只有工具返回的内容可以称为已经读到，不要假装读过后文。',
+    ]
+    return "\n".join(lines)
+
+
+def _fmt_share_message(
+    book_title: str,
+    chunk_index: int,
+    total_chunks: int,
+    note: dict,
+) -> str:
+    """给后台主动分享使用: 优先使用 share_message。"""
+    share_msg = note.get("share_message", "") or note.get("summary", "")
+    return (
+        f'我刚刚继续读了一小段《{book_title}》。\n\n'
+        f'{share_msg}\n\n'
+        f'(进度: 第 {chunk_index}/{total_chunks} 段)'
+    )
+
+
+def _fmt_notes_tool_context(notes: list[dict], limit: int, book_title: str = "") -> str:
+    """给 autoread_get_notes LLM Tool 使用的内部上下文。"""
+    if not notes:
+        return (
+            '[内部阅读笔记查询结果]\n'
+            '当前没有已保存的阅读笔记。\n'
+            '请自然告知用户还没有笔记，不要编造。'
+        )
+
+    header = f'[内部阅读笔记, 请不要原样复述字段名, 用当前人格自然回应]\n'
+    if book_title:
+        header += f'书籍: {book_title}\n'
+    header += f'最近 {len(notes)} 条笔记:\n'
+
+    body_lines = []
+    for i, n in enumerate(notes, 1):
+        ts = n.get("created_at", "")[:16]
+        body_lines.append(
+            f'--- 笔记{i} ---\n'
+            f'时间: {ts}\n'
+            f'阶段概括: {n.get("summary", "")[:120]}\n'
+            f'当时感受: {n.get("reflection", "")[:120]}\n'
+            f'分享建议: {n.get("share_message", "")[:120]}'
+        )
+
+    return (
+        header
+        + "\n".join(body_lines)
+        + "\n\n"
+        + (
+            '请根据以上内部信息，用当前人格自然回应用户。'
+            '不要输出「时间」「阶段概括」「感受」「分享建议」等字段名，'
+            '不要写成报告。'
+            '只提及工具实际返回的内容，不要编造未读到的情节。'
+        )
+    )
+
+
+def _fmt_status_tool_context(session: dict) -> str:
+    """给 autoread_get_status LLM Tool 使用的内部上下文。"""
+    title = session.get("current_book_title", "?")
+    idx = session.get("current_chunk_index", 0)
+    total = session.get("total_chunks", 0)
+    paused = session.get("paused", False)
+    last = session.get("last_read_at")
+    nxt = session.get("next_read_at")
+
+    if idx >= total > 0:
+        status_line = "已读完整本书"
+    elif paused:
+        status_line = "阅读已暂停"
+    else:
+        status_line = "正在持续阅读中"
+
+    return (
+        f'[内部阅读状态, 请不要原样复述字段名, 用当前人格自然回应]\n'
+        f'书名: {title}\n'
+        f'当前进度: 第 {idx}/{total} 段\n'
+        f'状态: {status_line}\n'
+        f'上次阅读时间: {last or "尚未阅读"}\n'
+        f'下次计划阅读时间: {nxt or "待定"}\n'
+        f'\n'
+        f'请根据以上信息，用当前人格自然告知用户当前阅读状态。'
+        f'不要输出「书名」「进度」「状态」「上次阅读时间」「下次阅读时间」等字段名。'
+    )
+
+
+class ReadStepResult:
+    """一次阅读推进的统一结果对象。
+
+    不同入口使用不同字段:
+    - /read step -> debug_message
+    - LLM Tool -> tool_context
+    - Worker share -> share_message
+    """
+
+    __slots__ = ("record", "debug_message", "tool_context", "share_message", "advanced", "error")
+
+    def __init__(
+        self,
+        *,
+        record: dict | None = None,
+        debug_message: str = "",
+        tool_context: str = "",
+        share_message: str = "",
+        advanced: bool = False,
+        error: str | None = None,
+    ):
+        self.record = record or {}
+        self.debug_message = debug_message
+        self.tool_context = tool_context
+        self.share_message = share_message
+        self.advanced = advanced
+        self.error = error
+
+
+def _should_share_record(record: dict, share_mode: str) -> bool:
+    """根据 ReadingRecord 和 auto_share_mode 决定是否应主动分享。
+
+    使用新 schema 的 importance_score + share_message 替代旧的 should_share。
+    """
+    share_msg = record.get("share_message", "")
+    if not share_msg.strip():
+        return False
+
+    if share_mode == "every_step":
+        return True
+    if share_mode == "none":
+        return False
+
+    importance = float(record.get("importance_score", 0.0))
+    needs_review = bool(record.get("needs_deeper_review", False))
+
+    if share_mode == "chapter":
+        # 重要性高或需要深入复核时分享
+        return importance >= 0.5 or needs_review or bool(share_msg.strip())
+
+    if share_mode in ("daily", "finish"):
+        return importance >= 0.5 or needs_review
+
+    return False
 
 
 class AutoReadService:
@@ -87,7 +295,11 @@ class AutoReadService:
         """列出已导入书籍。"""
         books = await self.state_store.list_books()
         if not books:
-            return "暂无已导入的书籍。请先将 txt/md 文件放入 plugin_data/astrbot_plugin_autoread/books/ 后使用 /read import <文件名> 导入。"
+            return (
+                "暂无已导入的书籍。"
+                "请先将 txt/md 文件放入 plugin_data/astrbot_plugin_autoread/books/ "
+                "后使用 /read import <文件名> 导入。"
+            )
 
         lines = ["已导入书籍:"]
         for b in books:
@@ -109,7 +321,6 @@ class AutoReadService:
             return "暂无已导入的书籍可供选择。"
 
         if not preference:
-            # 无偏好时返回第一本
             chosen = books[0]
             return (
                 f"当前没有特别的偏好，建议阅读《{chosen['title']}》。\n"
@@ -117,17 +328,14 @@ class AutoReadService:
                 f"如需开始阅读，请调用 autoread_start_book 或使用 /read start {chosen['book_id']}"
             )
 
-        # 简单关键词匹配
         pref_lower = preference.lower()
         scored = []
         for b in books:
             title_lower = b["title"].lower()
             score = 0
-            # 标题包含偏好词
             for word in pref_lower.split():
                 if word in title_lower:
                     score += 10
-            # 加上一些基本的启发式匹配
             if pref_lower in title_lower:
                 score += 20
             scored.append((score, b))
@@ -193,10 +401,15 @@ class AutoReadService:
     ) -> str:
         """读取当前书的下一段文本、生成笔记、推进进度。
 
-        硬性规则：
-        - LLM 调用失败：不推进进度
-        - note 保存失败：不推进进度
-        - 主动发送失败：不回滚进度，不丢失笔记，只记录 last_error
+        硬性规则:
+        - LLM 调用失败: 不推进进度
+        - note 保存失败: 不推进进度
+        - 主动发送失败: 不回滚进度，不丢失笔记，只记录 last_error
+
+        返回格式由 source 决定:
+        - "command" -> _fmt_command_result (结构化调试信息)
+        - "llm_tool" -> _fmt_tool_context (内部上下文 + 自然回应指令)
+        - "worker" / 其他 -> _fmt_share_message (自然语言分享)
         """
         session = await self.state_store.get_session(umo)
         if session is None:
@@ -260,23 +473,35 @@ class AutoReadService:
             logger.warning(f"[AutoRead] memory_bridge failed (non-blocking): {exc}")
 
         # 推进进度
-        new_session = await self.state_store.advance_progress(umo)
+        await self.state_store.advance_progress(umo)
 
-        # 构建返回消息
-        result_lines = [
-            f"📖 《{book['title']}》第 {chunk_index + 1}/{total_chunks} 段",
-            f"章节: {chunk.get('chapter', '未知')}",
-            f"",
-            f"摘要: {note.get('summary', '')}",
-        ]
-        if note.get("detail"):
-            result_lines.append(f"细节: {note.get('detail', '')}")
-        if note.get("reflection"):
-            result_lines.append(f"感想: {note.get('reflection', '')}")
+        # 根据入口类型构建不同的返回文本
+        if source == "llm_tool":
+            result = _fmt_tool_context(
+                book_title=book["title"],
+                chunk_index=chunk_index,
+                total_chunks=total_chunks,
+                chapter=chunk.get("chapter", "未知"),
+                note=note,
+            )
+        elif source == "command":
+            result = _fmt_command_result(
+                book_title=book["title"],
+                chunk_index=chunk_index,
+                total_chunks=total_chunks,
+                chapter=chunk.get("chapter", "未知"),
+                note=note,
+            )
+        else:
+            # worker 或其他: 优先使用 share_message
+            result = _fmt_share_message(
+                book_title=book["title"],
+                chunk_index=chunk_index + 1,
+                total_chunks=total_chunks,
+                note=note,
+            )
 
-        result = "\n".join(result_lines)
-
-        # 主动分享（如果配置了且需要）
+        # 主动分享（仅在 worker 模式下执行）
         if send_message and source == "worker":
             share_result = await self._maybe_share(umo, session, note)
             if share_result:
@@ -288,21 +513,35 @@ class AutoReadService:
     # get_status
     # ------------------------------------------------------------------
 
-    async def get_status(self, umo: str) -> str:
-        """返回当前阅读状态。"""
+    async def get_status(self, umo: str, source: str = "command") -> str:
+        """返回当前阅读状态。
+
+        source="llm_tool" 时返回内部上下文（带自然回应指令）。
+        source="command" 时返回结构化调试信息。
+        """
         session = await self.state_store.get_session(umo)
         if session is None or not session.get("current_book_id"):
-            return (
+            msg = (
                 "当前没有进行中的阅读任务。\n"
                 "使用 /read bind 绑定会话，/read import 导入书籍，/read start <book_id> 开始阅读。"
             )
+            if source == "llm_tool":
+                return (
+                    f"[内部状态查询结果]\n{msg}\n"
+                    f"请自然告知用户当前没有进行中的阅读任务。"
+                )
+            return msg
 
+        if source == "llm_tool":
+            return _fmt_status_tool_context(session)
+
+        # command 入口: 结构化
         if session.get("current_chunk_index", 0) >= session.get("total_chunks", 0):
-            status = "✅ 已读完"
+            status = "DONE 已读完"
         elif session.get("paused"):
-            status = "⏸️ 已暂停"
+            status = "PAUSED 已暂停"
         else:
-            status = "📖 阅读中"
+            status = "READING 阅读中"
 
         return (
             f"{status}\n"
@@ -319,12 +558,30 @@ class AutoReadService:
     # get_notes
     # ------------------------------------------------------------------
 
-    async def get_notes(self, umo: str, limit: int = 5) -> str:
-        """返回最近笔记。"""
+    async def get_notes(self, umo: str, limit: int = 5, source: str = "command") -> str:
+        """返回最近笔记。
+
+        source="llm_tool" 时返回内部上下文（带自然回应指令）。
+        source="command" 时返回结构化调试信息。
+        """
         notes = await self.state_store.get_recent_notes_for_session(umo, limit)
         if not notes:
-            return "暂无阅读笔记。"
+            msg = "暂无阅读笔记。"
+            if source == "llm_tool":
+                return (
+                    f"[内部阅读笔记查询结果]\n{msg}\n"
+                    f"请自然告知用户还没有笔记，不要编造。"
+                )
+            return msg
 
+        if source == "llm_tool":
+            session = await self.state_store.get_session(umo)
+            book_title = ""
+            if session:
+                book_title = session.get("current_book_title", "")
+            return _fmt_notes_tool_context(notes, limit, book_title)
+
+        # command 入口: 结构化
         lines = ["最近阅读笔记:"]
         for n in notes:
             ts = n.get("created_at", "?")
@@ -375,26 +632,15 @@ class AutoReadService:
     # ------------------------------------------------------------------
 
     async def _maybe_share(
-        self, umo: str, session: dict, note: dict
+        self, umo: str, session: dict, record: dict
     ) -> str | None:
-        """根据 auto_share_mode 决定是否主动分享，并尝试发送消息。"""
+        """根据 auto_share_mode 和 ReadingRecord 决定是否主动分享，并尝试发送消息。"""
         share_mode = session.get("auto_share_mode", "chapter")
 
-        should_send = False
-        if share_mode == "every_step":
-            should_send = True
-        elif share_mode == "chapter" and note.get("should_share"):
-            should_send = True
-        elif share_mode == "none":
-            should_send = False
-        # daily / finish 暂按 chapter 处理
-        elif share_mode in ("daily", "finish"):
-            should_send = note.get("should_share", False)
-
-        if not should_send:
+        if not _should_share_record(record, share_mode):
             return None
 
-        share_msg = note.get("share_message", "") or note.get("summary", "")
+        share_msg = record.get("share_message", "") or record.get("summary", "")
         title = session.get("current_book_title", "?")
         idx = session.get("current_chunk_index", 0)
         total = session.get("total_chunks", 0)
@@ -402,15 +648,15 @@ class AutoReadService:
         message = (
             f"我刚刚继续读了一小段《{title}》。\n\n"
             f"{share_msg}\n\n"
-            f"现在进度：{idx}/{total}"
+            f"现在进度: {idx}/{total}"
         )
 
         try:
             from astrbot.api.message_components import MessageChain
             await self.context.send_message(umo, MessageChain().message(message))
-            return None  # 成功发送，不返回额外文本
+            return None
         except Exception as exc:
             err_msg = f"主动消息发送失败: {exc}"
             await self.state_store.set_last_error(umo, err_msg)
             logger.warning(f"[AutoRead] Share failed: {exc}")
-            return f"（主动分享失败: {err_msg}。笔记已保存，可通过 /read notes 查看。）"
+            return f"(主动分享失败: {err_msg}。笔记已保存，可通过 /read notes 查看。)"

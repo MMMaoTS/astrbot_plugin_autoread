@@ -11,7 +11,12 @@ from .services.reading_state import ReadingStateStore
 from .services.note_writer import NoteWriter
 from .services.memory_bridge import MemoryBridge
 from .services.autoread_service import AutoReadService
+from .services.config_service import ConfigService
+from .services.provider_resolver import ProviderResolver
+from .services.model_router import ModelRouter
 from .worker.reading_worker import ReadingWorker
+from .webui.webui_service import WebUIService
+from .webui.webui_api import AutoReadWebUIAPI
 
 PLUGIN_NAME = "astrbot_plugin_autoread"
 
@@ -42,22 +47,43 @@ class AutoReadPlugin(Star):
         (self.data_dir / "chunks").mkdir(exist_ok=True)
         (self.data_dir / "notes").mkdir(exist_ok=True)
 
+        # 配置服务（优先级：override > raw_config > schema default）
+        self.config_service = ConfigService(
+            raw_config=self.config,
+            data_dir=self.data_dir,
+        )
+
+        # Provider 解析器
+        self.provider_resolver = ProviderResolver(
+            context=self.context,
+            config_service=self.config_service,
+        )
+
+        # 模型路由器
+        self.model_router = ModelRouter(
+            config_service=self.config_service,
+        )
+
         # 基础设施层
         self.state_store = ReadingStateStore(self.data_dir)
         self.book_loader = BookLoader(
             data_dir=self.data_dir,
-            allowed_extensions=list(self.config.get("allowed_extensions", [".txt", ".md"])),
+            allowed_extensions=list(
+                self.config_service.get("allowed_extensions", [".txt", ".md"])
+            ),
         )
         self.chunker = TextChunker(
-            chunk_size=int(self.config.get("chunk_size", 1800)),
-            chunk_overlap=int(self.config.get("chunk_overlap", 120)),
+            chunk_size=int(self.config_service.get("chunk_size", 1800)),
+            chunk_overlap=int(self.config_service.get("chunk_overlap", 120)),
         )
         self.note_writer = NoteWriter(
             context=self.context,
-            config=self.config,
+            config_service=self.config_service,
+            provider_resolver=self.provider_resolver,
+            model_router=self.model_router,
         )
         self.memory_bridge = MemoryBridge(
-            backend=self.config.get("memory_backend", "none"),
+            backend=self.config_service.get("memory_backend", "none"),
         )
 
         # 业务编排层
@@ -72,14 +98,31 @@ class AutoReadPlugin(Star):
             memory_bridge=self.memory_bridge,
         )
 
-        # 后台 worker
+        # 后台 worker（使用 config_service 以支持动态配置）
         self.worker = ReadingWorker(
             context=self.context,
-            config=self.config,
+            config_service=self.config_service,
             service=self.autoread_service,
             state_store=self.state_store,
         )
         self._worker_task: asyncio.Task | None = None
+
+        # WebUI 管理层
+        self.webui_service = WebUIService(
+            data_dir=self.data_dir,
+            state_store=self.state_store,
+            autoread_service=self.autoread_service,
+            book_loader=self.book_loader,
+            chunker=self.chunker,
+            config_service=self.config_service,
+            provider_resolver=self.provider_resolver,
+        )
+        self.webui_api = AutoReadWebUIAPI(
+            context=self.context,
+            webui_service=self.webui_service,
+        )
+        if self.config_service.get("webui_enabled", True):
+            self.webui_api.register_routes()
 
     # ==================================================================
     # 生命周期
@@ -288,6 +331,10 @@ class AutoReadPlugin(Star):
     async def autoread_read_next(self, event: AstrMessageEvent, reason: str = ""):
         """读取当前书的下一段文本，生成阶段性读书笔记，并推进阅读进度。
 
+        注意：工具返回的是内部结构化阅读结果。你必须把结果转化为符合当前人格的自然表达，
+        不要原样输出"摘要/细节/反思/书名/进度/章节/分享素材"等字段名，不要写成报告。
+        只有工具返回的内容可以称为已经读到，不要假装读过后文或评价整本书。
+
         Args:
             reason(string): 本次主动阅读的原因，例如"用户问我最近读到哪里了""我想继续读一点""定时任务触发"。
         """
@@ -310,6 +357,9 @@ class AutoReadPlugin(Star):
     async def autoread_get_status(self, event: AstrMessageEvent):
         """查看当前会话的持续阅读状态。
 
+        注意：工具返回的是内部状态数据。你必须把结果转化为自然表达，
+        不要原样输出"书名/进度/状态/上次阅读时间/下次阅读时间"等字段名。
+
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
@@ -317,12 +367,16 @@ class AutoReadPlugin(Star):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         umo = event.unified_msg_origin
-        result = await self.autoread_service.get_status(umo)
+        result = await self.autoread_service.get_status(umo, source="llm_tool")
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_get_notes")
     async def autoread_get_notes(self, event: AstrMessageEvent, limit: float = 5):
         """查看当前书最近的持续阅读笔记。
+
+        注意：工具返回的是内部结构化笔记数据。你必须把结果转化为符合当前人格的自然表达，
+        不要原样输出"时间/阶段概括/感受/分享建议"等字段名，不要写成报告。
+        只提及工具实际返回的内容，不要编造未读到的情节。
 
         Args:
             limit(number): 返回最近多少条笔记，默认 5 条。
@@ -331,7 +385,7 @@ class AutoReadPlugin(Star):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         umo = event.unified_msg_origin
-        result = await self.autoread_service.get_notes(umo=umo, limit=int(limit))
+        result = await self.autoread_service.get_notes(umo=umo, limit=int(limit), source="llm_tool")
         yield event.plain_result(result)
 
     @filter.llm_tool(name="autoread_pause")

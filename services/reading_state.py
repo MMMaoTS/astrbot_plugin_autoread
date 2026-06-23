@@ -210,6 +210,140 @@ class ReadingStateStore:
         return notes[-limit:]
 
     # ------------------------------------------------------------------
+    # Sessions (批量查询，供 WebUI 使用)
+    # ------------------------------------------------------------------
+
+    async def list_sessions(self) -> dict[str, dict]:
+        """返回所有 session（key 为原始 umo）。调用方需自行脱敏。"""
+        state = await self.load_state()
+        return state.get("sessions", {})
+
+    # ------------------------------------------------------------------
+    # Notes (跨书查询，供 WebUI 使用)
+    # ------------------------------------------------------------------
+
+    async def count_notes_for_book(self, book_id: str) -> int:
+        notes_path = self.data_dir / "notes" / f"{book_id}.notes.jsonl"
+        if not notes_path.exists():
+            return 0
+        count = 0
+        with open(notes_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    count += 1
+        return count
+
+    async def count_all_notes(self) -> int:
+        notes_dir = self.data_dir / "notes"
+        if not notes_dir.exists():
+            return 0
+        total = 0
+        for p in notes_dir.glob("*.notes.jsonl"):
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        total += 1
+        return total
+
+    async def get_notes_by_book(
+        self,
+        book_id: str,
+        page: int = 1,
+        page_size: int = 20,
+        keyword: str = "",
+    ) -> tuple[list[dict], int]:
+        """按 book_id 分页读取笔记。返回 (notes, total)。"""
+        notes_path = self.data_dir / "notes" / f"{book_id}.notes.jsonl"
+        if not notes_path.exists():
+            return [], 0
+        all_notes: list[dict] = []
+        with open(notes_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    note = json.loads(line)
+                    if keyword:
+                        kw = keyword.lower()
+                        text = json.dumps(note, ensure_ascii=False).lower()
+                        if kw not in text:
+                            continue
+                    all_notes.append(note)
+                except json.JSONDecodeError:
+                    continue
+        total = len(all_notes)
+        # 倒序（最新在前）
+        all_notes.reverse()
+        start = (page - 1) * page_size
+        end = start + page_size
+        return all_notes[start:end], total
+
+    async def get_all_notes(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        keyword: str = "",
+        book_id: str = "",
+    ) -> tuple[list[dict], int]:
+        """跨所有书籍分页读取笔记。返回 (notes, total)。"""
+        notes_dir = self.data_dir / "notes"
+        if not notes_dir.exists():
+            return [], 0
+        all_notes: list[dict] = []
+        state = await self.load_state()
+        books = state.get("books", {})
+        for p in sorted(notes_dir.glob("*.notes.jsonl")):
+            bid = p.stem.replace(".notes", "")
+            if book_id and bid != book_id:
+                continue
+            book_title = books.get(bid, {}).get("title", bid)
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        note = json.loads(line)
+                        note["book_title"] = book_title
+                        if keyword:
+                            kw = keyword.lower()
+                            text = json.dumps(note, ensure_ascii=False).lower()
+                            if kw not in text:
+                                continue
+                        all_notes.append(note)
+                    except json.JSONDecodeError:
+                        continue
+        # 倒序（最新在前）
+        all_notes.sort(key=lambda n: n.get("created_at", ""), reverse=True)
+        total = len(all_notes)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return all_notes[start:end], total
+
+    async def get_note_by_id(self, book_id: str, note_id: str) -> dict | None:
+        """按 note_id 查找单条笔记。"""
+        notes_path = self.data_dir / "notes" / f"{book_id}.notes.jsonl"
+        if not notes_path.exists():
+            return None
+        with open(notes_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    note = json.loads(line)
+                    if note.get("note_id") == note_id:
+                        return note
+                except json.JSONDecodeError:
+                    continue
+        return None
+
+    async def count_books(self) -> int:
+        state = await self.load_state()
+        return len(state.get("books", {}))
+
+    # ------------------------------------------------------------------
     # 工具
     # ------------------------------------------------------------------
 

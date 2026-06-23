@@ -1,6 +1,7 @@
 """后台定时阅读 worker。
 
 负责循环扫描到期阅读任务，调用 AutoReadService.read_next_chunk。
+使用 ConfigService 读取动态配置（支持 WebUI 修改即时生效）。
 """
 
 import asyncio
@@ -12,19 +13,21 @@ from astrbot.api import logger
 class ReadingWorker:
     """后台定时调度器，不直接实现阅读逻辑。"""
 
-    def __init__(self, *, context, config, service, state_store):
+    def __init__(self, *, context, config_service, service, state_store):
         self.context = context
-        self.config = config
+        self.config_service = config_service
         self.service = service
         self.state_store = state_store
 
     async def run(self):
         """主循环，按 worker_tick_seconds 间隔扫描到期任务。"""
-        tick = int(self.config.get("worker_tick_seconds", 60))
+        tick = int(self.config_service.get("worker_tick_seconds", 60))
         logger.info(f"[AutoRead] Worker started, tick={tick}s")
 
         while True:
             try:
+                # 每轮重新读取 tick（支持 WebUI 修改后即时生效）
+                tick = int(self.config_service.get("worker_tick_seconds", 60))
                 await self.tick()
                 await asyncio.sleep(tick)
             except asyncio.CancelledError:
