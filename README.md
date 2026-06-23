@@ -86,7 +86,7 @@ AstrBot/data/plugin_data/astrbot_plugin_autoread/books/
 
 ### 自然对话入口
 
-自然对话工具调用依赖模型支持 Function Calling。可用工具：`autoread_list_books`、`autoread_choose_book`、`autoread_start_book`、`autoread_read_next`、`autoread_get_status`、`autoread_get_notes`、`autoread_pause`、`autoread_resume`、`autoread_stop`。
+自然对话工具调用依赖模型支持 Function Calling。可用工具（11 个）：`autoread_list_books`、`autoread_choose_book`、`autoread_start_book`、`autoread_read_next`（继续阅读）、`autoread_reread`（重新阅读）、`autoread_set_progress`（设置进度）、`autoread_get_status`、`autoread_get_notes`、`autoread_pause`、`autoread_resume`、`autoread_stop`。
 
 ```text
 你自己挑一本感兴趣的书读吧。         → 选书并开始阅读

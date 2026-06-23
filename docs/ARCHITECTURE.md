@@ -30,7 +30,7 @@ worker/reading_worker.py                   # 后台轮询
 入口层 (`main.py`) 只负责事件适配，不包含业务逻辑：
 
 - `/read` 命令组：调试、管理、兜底入口
-- `@filter.llm_tool`：自然对话工具入口（9 个工具：list_books, choose_book, start_book, read_next, get_status, get_notes, pause, resume, stop）
+- `@filter.llm_tool`：自然对话工具入口（11 个工具：list_books, choose_book, start_book, read_next, reread, set_progress, get_status, get_notes, pause, resume, stop）
 - 生命周期管理：worker 启动与销毁
 - WebUI API 注册：通过 `context.register_web_api` 注册 30 条路由
 

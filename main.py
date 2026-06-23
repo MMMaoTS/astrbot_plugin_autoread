@@ -621,6 +621,77 @@ class AutoReadPlugin(Star):
         result = await self.autoread_service.stop(event.unified_msg_origin)
         yield event.plain_result(result)
 
+    @filter.llm_tool(name="autoread_reread")
+    async def autoread_reread(
+        self, _event_or_ctx, book_id: str = "", note_id: str = "",
+        start_percent: float = 0, end_percent: float = 0,
+        start_index: float = -1, end_index: float = -1,
+    ):
+        """重新阅读指定范围。不推进主进度，不删除旧笔记。与继续阅读（autoread_read_next）不同。
+
+        适用场景：用户说"重新读一下第三章""这段重新读一遍""这条笔记对应的原文再读一次"。
+
+        Args:
+            book_id(string): 书籍 ID。如果通过 note_id 定位可省略。
+            note_id(string): 笔记 ID。根据笔记的 chunk_index 定位原文范围。
+            start_percent(number): 起始百分比（0-100）。与 start_index 二选一。
+            end_percent(number): 结束百分比（0-100）。与 end_index 二选一。
+            start_index(number): 起始段索引。与 start_percent 二选一。
+            end_index(number): 结束段索引。与 end_percent 二选一。
+        """
+        event = self._get_event(_event_or_ctx)
+        if not self.config_service.get("enable_llm_tools", True):
+            yield event.plain_result("自然对话工具入口当前已关闭。")
+            return
+        umo = event.unified_msg_origin
+
+        si = int(start_index) if start_index >= 0 else None
+        ei = int(end_index) if end_index >= 0 else None
+        sp = float(start_percent) if start_percent > 0 else None
+        ep = float(end_percent) if end_percent > 0 else None
+
+        result = await self.autoread_service.reread_range(
+            umo=umo,
+            book_id=book_id,
+            note_id=note_id or None,
+            start_index=si,
+            end_index=ei,
+            start_percent=sp,
+            end_percent=ep,
+            source="llm_tool",
+        )
+        yield event.plain_result(result)
+
+    @filter.llm_tool(name="autoread_set_progress")
+    async def autoread_set_progress(
+        self, _event_or_ctx, book_id: str = "", percent: float = 0, chunk_index: float = -1
+    ):
+        """设置当前阅读进度。不读取内容，不生成笔记。仅修改进度指针。
+
+        适用场景：用户说"把进度调到35%""从第10段开始"。
+
+        Args:
+            book_id(string): 书籍 ID。
+            percent(number): 目标百分比（0-100）。与 chunk_index 二选一。
+            chunk_index(number): 目标段索引。与 percent 二选一。
+        """
+        event = self._get_event(_event_or_ctx)
+        if not self.config_service.get("enable_llm_tools", True):
+            yield event.plain_result("自然对话工具入口当前已关闭。")
+            return
+        umo = event.unified_msg_origin
+
+        ci = int(chunk_index) if chunk_index >= 0 else None
+        pct = float(percent) if percent > 0 else None
+
+        result = await self.autoread_service.set_progress(
+            umo=umo,
+            book_id=book_id,
+            chunk_index=ci,
+            percent=pct,
+        )
+        yield event.plain_result(result)
+
     # ==================================================================
     # LLM Tool 监控钩子
     # ==================================================================
