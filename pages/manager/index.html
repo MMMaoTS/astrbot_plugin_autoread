@@ -154,6 +154,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
   <button class="tab-btn" data-tab="reading">阅读任务</button>
   <button class="tab-btn" data-tab="notes">笔记</button>
   <button class="tab-btn" data-tab="settings">设置</button>
+  <button class="tab-btn" data-tab="backup">备份恢复</button>
 </nav>
 
 <section id="messages" class="messages" hidden></section>
@@ -305,6 +306,43 @@ tr:hover td { background: rgba(0,0,0,0.02); }
         <button type="button" id="btn-reload-settings" class="btn btn-secondary">重新加载</button>
       </div>
     </form>
+  </section>
+</div>
+
+<!-- ============ 备份恢复 ============ -->
+<div data-tab-panel="backup" class="tab-content" hidden>
+  <section class="backup">
+    <h2>数据导出</h2>
+    <p class="hint" style="margin-bottom:12px">将书籍或笔记打包为 zip 备份文件下载。备份包含完整原文、切片和元数据。</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="btn-export-books" class="btn btn-secondary">导出书籍</button>
+      <button id="btn-export-notes" class="btn btn-secondary">导出笔记</button>
+      <button id="btn-export-full" class="btn btn-secondary">导出完整备份</button>
+    </div>
+  </section>
+
+  <section class="backup-import">
+    <h2>数据导入</h2>
+    <p class="hint" style="margin-bottom:12px">导入会以合并方式进行。已存在的书籍或笔记会自动跳过，不会覆盖、删除或替换现有数据。</p>
+    <div class="upload-row">
+      <input type="file" id="backup-upload-input" accept=".zip" />
+      <button id="btn-backup-parse" class="btn btn-primary">解析备份</button>
+    </div>
+    <div id="backup-preview" class="backup-preview" hidden>
+      <h4>预览结果</h4>
+      <dl id="backup-preview-dl"></dl>
+      <button id="btn-backup-import" class="btn btn-primary" disabled>合并导入</button>
+      <p class="hint" id="backup-preview-hint"></p>
+    </div>
+  </section>
+
+  <section class="backup-history">
+    <h2>导入记录</h2>
+    <div class="table-wrap">
+      <table><thead><tr>
+        <th>时间</th><th>备份 ID</th><th>类型</th><th>导入</th><th>跳过</th><th>状态</th>
+      </tr></thead><tbody id="backup-history-tbody"></tbody></table>
+    </div>
   </section>
 </div>
 
@@ -712,10 +750,97 @@ function getGroupForKey(key) {
 }
 
 // ======================================================================
+// Backup
+// ======================================================================
+
+function exportBackup(type) {
+  var endpoint = "backup/export/" + type;
+  return bridge.download(endpoint, {}, "autoread_" + type + "_backup.zip").catch(function(err) {
+    showError("导出失败: " + (err.message || "未知错误"));
+  });
+}
+
+function parseBackup() {
+  var input = document.getElementById("backup-upload-input");
+  var file = input.files[0];
+  if (!file) { showError("请先选择一个 .zip 备份文件"); return; }
+  if (!file.name.toLowerCase().endsWith(".zip")) { showError("仅支持 .zip 文件"); return; }
+
+  var btn = document.getElementById("btn-backup-parse");
+  btn.disabled = true; btn.textContent = "解析中...";
+
+  uploadFile("backup/import/preview", file).then(function(data) {
+    renderBackupPreview(data);
+  }).catch(function(err) {
+    showError("解析失败: " + (err.message || "未知错误"));
+    document.getElementById("backup-preview").hidden = true;
+  }).finally(function() {
+    btn.disabled = false; btn.textContent = "解析备份";
+  });
+}
+
+function renderBackupPreview(data) {
+  var panel = document.getElementById("backup-preview");
+  panel.hidden = false;
+  document.getElementById("backup-preview-dl").innerHTML =
+    '<dt>备份 ID</dt><dd><code>' + escapeHtml(data.backup_id) + '</code></dd>' +
+    '<dt>类型</dt><dd>' + escapeHtml(data.backup_type) + '</dd>' +
+    '<dt>总记录</dt><dd>' + (data.total_items || 0) + '</dd>' +
+    '<dt>可导入</dt><dd>' + (data.new_items || 0) + '</dd>' +
+    '<dt>已存在跳过</dt><dd>' + (data.skipped_existing_ids || 0) + '</dd>';
+
+  var hint = document.getElementById("backup-preview-hint");
+  hint.textContent = data.message || "";
+
+  var btn = document.getElementById("btn-backup-import");
+  if (data.already_imported_backup || data.new_items === 0) {
+    btn.disabled = true;
+  } else {
+    btn.disabled = false;
+  }
+}
+
+function importBackup() {
+  var input = document.getElementById("backup-upload-input");
+  var file = input.files[0];
+  if (!file) { showError("请先选择一个 .zip 备份文件"); return; }
+
+  var btn = document.getElementById("btn-backup-import");
+  btn.disabled = true; btn.textContent = "导入中...";
+
+  uploadFile("backup/import/apply", file).then(function(data) {
+    showMessage(data.message || "导入完成: +" + (data.imported_items || 0) + " 条");
+    document.getElementById("backup-preview").hidden = true;
+    document.getElementById("backup-upload-input").value = "";
+    loadBackupHistory();
+  }).catch(function(err) {
+    showError("导入失败: " + (err.message || "未知错误"));
+  }).finally(function() {
+    btn.disabled = false; btn.textContent = "合并导入";
+  });
+}
+
+function loadBackupHistory() {
+  return apiGet("backup/history").then(function(data) {
+    var tbody = document.getElementById("backup-history-tbody");
+    var items = data.items || [];
+    if (!items.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无导入记录。</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(function(h) {
+      return '<tr><td>' + formatTime(h.imported_at) + '</td><td><code>' + escapeHtml(h.backup_id) + '</code></td>' +
+        '<td>' + escapeHtml(h.backup_type) + '</td><td>' + (h.imported_items || 0) + '</td>' +
+        '<td>' + (h.skipped_existing_ids || 0) + '</td><td>' + escapeHtml(h.status) + '</td></tr>';
+    }).join("");
+  }).catch(function(err) { console.error("load backup history:", err); });
+}
+
+// ======================================================================
 // Refresh all
 // ======================================================================
 function refreshAll() {
-  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes()]).then(function() {
+  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes(), loadBackupHistory()]).then(function() {
     return apiGet("books", { page: 1, page_size: 100 }).then(function(data) {
       updateNotesBookFilter(data.items);
     }).catch(function() {});
@@ -767,6 +892,13 @@ document.getElementById("settings-form").addEventListener("submit", function(e) 
   e.preventDefault(); saveSettings();
 });
 document.getElementById("btn-reload-settings").addEventListener("click", loadSettings);
+
+// Backup
+document.getElementById("btn-export-books").addEventListener("click", function() { exportBackup("books"); });
+document.getElementById("btn-export-notes").addEventListener("click", function() { exportBackup("notes"); });
+document.getElementById("btn-export-full").addEventListener("click", function() { exportBackup("full"); });
+document.getElementById("btn-backup-parse").addEventListener("click", parseBackup);
+document.getElementById("btn-backup-import").addEventListener("click", importBackup);
 
 document.addEventListener("click", function(e) {
   if (_currentPanel) {

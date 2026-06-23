@@ -116,7 +116,45 @@ class AutoReadWebUIAPI:
             "List available providers for AutoRead",
         )
 
-        logger.info(f"[AutoRead WebUI] Registered {10} web API routes")
+        # ---- Backup ----
+        ctx.register_web_api(
+            f"/{p}/backup/export/books",
+            self._backup_export_books,
+            ["GET"],
+            "Export books backup zip",
+        )
+        ctx.register_web_api(
+            f"/{p}/backup/export/notes",
+            self._backup_export_notes,
+            ["GET"],
+            "Export notes backup zip",
+        )
+        ctx.register_web_api(
+            f"/{p}/backup/export/full",
+            self._backup_export_full,
+            ["GET"],
+            "Export full backup zip",
+        )
+        ctx.register_web_api(
+            f"/{p}/backup/import/preview",
+            self._backup_import_preview,
+            ["POST"],
+            "Parse and preview backup zip",
+        )
+        ctx.register_web_api(
+            f"/{p}/backup/import/apply",
+            self._backup_import_apply,
+            ["POST"],
+            "Merge import backup zip",
+        )
+        ctx.register_web_api(
+            f"/{p}/backup/history",
+            self._backup_history,
+            ["GET"],
+            "List backup import history",
+        )
+
+        logger.info(f"[AutoRead WebUI] Registered {16} web API routes")
 
     # ==================================================================
     # 辅助函数
@@ -278,4 +316,74 @@ class AutoReadWebUIAPI:
             return json_response(data)
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] note_detail error: {exc}")
+            return error_response(str(exc), status_code=500)
+
+    # ==================================================================
+    # Backup
+    # ==================================================================
+
+    async def _backup_export_books(self):
+        try:
+            path = await self.webui.export_books_backup()
+            if path is None:
+                return error_response("导出失败", status_code=500)
+            return file_response(str(path), filename=path.name)
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] backup export books error: {exc}")
+            return error_response(str(exc), status_code=500)
+
+    async def _backup_export_notes(self):
+        try:
+            path = await self.webui.export_notes_backup()
+            if path is None:
+                return error_response("导出失败", status_code=500)
+            return file_response(str(path), filename=path.name)
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] backup export notes error: {exc}")
+            return error_response(str(exc), status_code=500)
+
+    async def _backup_export_full(self):
+        try:
+            path = await self.webui.export_full_backup()
+            if path is None:
+                return error_response("导出失败", status_code=500)
+            return file_response(str(path), filename=path.name)
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] backup export full error: {exc}")
+            return error_response(str(exc), status_code=500)
+
+    async def _backup_import_preview(self):
+        try:
+            files = await request.files()
+            upload = files.get("file")
+            if upload is None:
+                return error_response("缺少上传文件 (字段名: file)", status_code=400)
+            data = await self.webui.parse_backup(upload)
+            return json_response(data)
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] backup preview error: {exc}")
+            return error_response(str(exc), status_code=500)
+
+    async def _backup_import_apply(self):
+        try:
+            files = await request.files()
+            upload = files.get("file")
+            if upload is None:
+                return error_response("缺少上传文件 (字段名: file)", status_code=400)
+            data = await self.webui.import_backup_merge(upload)
+            return json_response(data)
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] backup import apply error: {exc}")
+            return error_response(str(exc), status_code=500)
+
+    async def _backup_history(self):
+        try:
+            data = await self.webui.get_backup_history()
+            return json_response({"items": data})
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] backup history error: {exc}")
             return error_response(str(exc), status_code=500)

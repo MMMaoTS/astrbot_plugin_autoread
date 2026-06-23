@@ -46,6 +46,7 @@ class WebUIService:
         chunker,
         config_service,
         provider_resolver=None,
+        backup_service=None,
     ):
         self.data_dir = data_dir
         self.state_store = state_store
@@ -54,6 +55,7 @@ class WebUIService:
         self.chunker = chunker
         self.config_service = config_service
         self.provider_resolver = provider_resolver
+        self.backup_service = backup_service
 
     # ------------------------------------------------------------------
     # 安全校验
@@ -502,3 +504,37 @@ class WebUIService:
                             continue
 
         return export_path
+
+    # ------------------------------------------------------------------
+    # Backup
+    # ------------------------------------------------------------------
+
+    async def export_books_backup(self) -> Path | None:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.export_books()
+
+    async def export_notes_backup(self) -> Path | None:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.export_notes()
+
+    async def export_full_backup(self) -> Path | None:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.export_full()
+
+    async def parse_backup(self, upload) -> dict:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.parse_backup(upload)
+
+    async def import_backup_merge(self, upload) -> dict:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.import_backup_merge(upload)
+
+    async def get_backup_history(self) -> list[dict]:
+        if self.backup_service is None:
+            return []
+        return await self.backup_service.get_history()

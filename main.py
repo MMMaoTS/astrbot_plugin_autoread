@@ -14,6 +14,7 @@ from .services.autoread_service import AutoReadService
 from .services.config_service import ConfigService
 from .services.provider_resolver import ProviderResolver
 from .services.model_router import ModelRouter
+from .services.backup_service import BackupService
 from .worker.reading_worker import ReadingWorker
 from .webui.webui_service import WebUIService
 from .webui.webui_api import AutoReadWebUIAPI
@@ -103,6 +104,12 @@ class AutoReadPlugin(Star):
         )
         self._worker_task: asyncio.Task | None = None
 
+        # 备份服务
+        self.backup_service = BackupService(
+            data_dir=self.data_dir,
+            state_store=self.state_store,
+        )
+
         # WebUI 管理层
         self.webui_service = WebUIService(
             data_dir=self.data_dir,
@@ -112,6 +119,7 @@ class AutoReadPlugin(Star):
             chunker=self.chunker,
             config_service=self.config_service,
             provider_resolver=self.provider_resolver,
+            backup_service=self.backup_service,
         )
         self.webui_api = AutoReadWebUIAPI(
             context=self.context,
