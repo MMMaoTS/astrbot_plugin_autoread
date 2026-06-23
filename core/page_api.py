@@ -545,6 +545,13 @@ class AutoReadWebUIAPI:
             result = await self.webui.delete_book(book_id)
             logger.info(f"[AutoRead WebUI] delete_book done: {result.get('message', '')}")
             return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except PermissionError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] delete_book error: {exc}")
+            return self._err(str(exc))
 
     async def _update_book_title(self):
         try:
