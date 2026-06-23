@@ -1,0 +1,1 @@
+# 第一版仅使用 Python 标准库和 AstrBot API。

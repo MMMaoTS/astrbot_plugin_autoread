@@ -1,0 +1,74 @@
+{
+  "enabled": {
+    "description": "是否启用自主阅读插件",
+    "type": "bool",
+    "default": true
+  },
+  "enable_llm_tools": {
+    "description": "是否启用自然对话工具调用入口",
+    "type": "bool",
+    "default": true
+  },
+  "allow_llm_read_next": {
+    "description": "是否允许 LLM 在自然对话中主动调用 autoread_read_next 推进阅读",
+    "type": "bool",
+    "default": true
+  },
+  "max_tool_read_steps_per_turn": {
+    "description": "单轮自然对话最多允许工具推进多少次阅读。第一版可只做配置预留。",
+    "type": "int",
+    "default": 1
+  },
+  "default_interval_minutes": {
+    "description": "默认阅读间隔，单位分钟",
+    "type": "int",
+    "default": 1440
+  },
+  "worker_tick_seconds": {
+    "description": "后台 worker 扫描间隔，单位秒。测试时可设为 30 或 60。",
+    "type": "int",
+    "default": 60
+  },
+  "chunk_size": {
+    "description": "每次阅读的最大字符数",
+    "type": "int",
+    "default": 1800
+  },
+  "chunk_overlap": {
+    "description": "切片重叠字符数，避免上下文断裂",
+    "type": "int",
+    "default": 120
+  },
+  "max_notes_per_book": {
+    "description": "每本书最多保留多少条阶段性笔记",
+    "type": "int",
+    "default": 200
+  },
+  "auto_share_mode": {
+    "description": "主动分享模式",
+    "type": "string",
+    "options": ["none", "daily", "chapter", "every_step", "finish"],
+    "default": "chapter"
+  },
+  "allow_url_import": {
+    "description": "是否允许从 URL 导入文本。第一版建议关闭。",
+    "type": "bool",
+    "default": false
+  },
+  "allowed_extensions": {
+    "description": "允许导入的本地文本扩展名",
+    "type": "list",
+    "default": [".txt", ".md"]
+  },
+  "memory_backend": {
+    "description": "长期记忆后端。第一版建议 none，仅保存插件自己的 notes。",
+    "type": "string",
+    "options": ["none", "angel_memory", "livingmemory"],
+    "default": "none"
+  },
+  "reading_persona_prompt": {
+    "description": "阅读笔记生成时的额外提示词",
+    "type": "text",
+    "default": "你正在进行持续阅读，而不是临时检索问答。请像真实读者一样记录理解、疑问、情绪和观点变化。只能基于本次实际读到的文本片段写笔记，不要假装已经读完整本书。"
+  }
+}
