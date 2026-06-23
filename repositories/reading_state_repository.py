@@ -109,6 +109,11 @@ class ReadingStateStore:
         state = await self.load_state()
         return state["books"].get(book_id)
 
+    async def save_book_meta(self, book_id: str, meta: dict) -> None:
+        state = await self.load_state()
+        state["books"][book_id] = meta
+        await self.save_state(state)
+
     async def list_books(self) -> list[dict]:
         state = await self.load_state()
         return list(state["books"].values())

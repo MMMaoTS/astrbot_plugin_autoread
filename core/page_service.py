@@ -287,7 +287,10 @@ class WebUIService:
     async def import_uploaded_book(
         self, stored_filename: str, title: str | None = None
     ) -> dict:
-        """导入已上传的文件（调用现有 book_loader + chunker）。"""
+        """导入已上传的文件（调用现有 book_loader + chunker）。
+
+        title 默认使用原始文件名（去扩展名）。stored_filename 仅用于内部存储。
+        """
         if not self.validate_filename(stored_filename):
             raise ValueError("无效的文件名")
 
@@ -295,10 +298,13 @@ class WebUIService:
         meta = imported.meta
         book_id = meta["book_id"]
 
+        # 如果外部传入了 title（原始文件名去扩展名），覆盖 book_loader 从 stored_filename 推导的值
         if title:
             title = title.strip()[:120]
             if title:
                 meta["title"] = title
+            elif "original_filename" in meta:
+                meta["title"] = Path(meta["original_filename"]).stem[:120]
 
         chunks = self.chunker.split(imported.text)
         meta["total_chunks"] = len(chunks)
@@ -701,7 +707,46 @@ class WebUIService:
                 "reread_by_natural_language": True,
                 "reread_by_command": True,
                 "set_progress": True,
+                "edit_book_title": True,
             },
+        }
+
+    # ------------------------------------------------------------------
+    # 书名编辑
+    # ------------------------------------------------------------------
+
+    async def update_book_title(self, book_id: str, title: str) -> dict:
+        if not self.validate_book_id(book_id):
+            raise ValueError("无效的 book_id")
+        title = title.strip()[:120]
+        if not title:
+            raise ValueError("书名不能为空")
+        # 过滤控制字符
+        title = ''.join(c for c in title if c.isprintable() or c in (' ', '\t'))
+        if not title.strip():
+            raise ValueError("书名不能只包含空白字符")
+
+        book = await self.state_store.get_book(book_id)
+        if book is None:
+            raise ValueError("book not found")
+
+        old_title = book.get("title", "")
+        book["title"] = title
+        await self.state_store.save_book_meta(book_id, book)
+
+        # 同步更新关联 session 中的 current_book_title
+        sessions = await self.state_store.list_sessions()
+        for umo, s in sessions.items():
+            if s.get("current_book_id") == book_id:
+                s["current_book_title"] = title
+                await self.state_store.update_session(umo, {"current_book_title": title})
+
+        logger.info(f"[AutoRead WebUI] Book title updated: {book_id} '{old_title}' -> '{title}'")
+        return {
+            "book_id": book_id,
+            "title": title,
+            "old_title": old_title,
+            "message": f"书名已更新: {title}",
         }
 
     # ------------------------------------------------------------------

@@ -240,6 +240,12 @@ class AutoReadWebUIAPI:
                 "Delete book (requires webui_delete_enabled)",
             )
             ctx.register_web_api(
+                f"/{p}/books/title/update",
+                self._update_book_title,
+                ["POST"],
+                "Update book title",
+            )
+            ctx.register_web_api(
                 f"/{p}/notes/delete",
                 self._delete_note,
                 ["POST"],
@@ -360,8 +366,11 @@ class AutoReadWebUIAPI:
                 return self._err("缺少上传文件 (字段名: file)")
             wrapped = _AsyncUploadFile(upload)
             result = await self.webui.upload_book_file(wrapped)
+            # 用原始文件名（去扩展名）作为书名，而非 stored_filename
+            original_title = Path(result.get("filename", "unknown")).stem[:120]
             import_result = await self.webui.import_uploaded_book(
-                stored_filename=result["stored_filename"]
+                stored_filename=result["stored_filename"],
+                title=original_title,
             )
             result.update(import_result)
             return self._ok(result)
@@ -536,6 +545,25 @@ class AutoReadWebUIAPI:
             result = await self.webui.delete_book(book_id)
             logger.info(f"[AutoRead WebUI] delete_book done: {result.get('message', '')}")
             return self._ok(result)
+
+    async def _update_book_title(self):
+        try:
+            body = await _json_body()
+            book_id = str(body.get("book_id", "")).strip()
+            title = str(body.get("title", "")).strip()
+            logger.info(f"[AutoRead WebUI] update_book_title: book_id={book_id}")
+            if not book_id:
+                return self._err("缺少 book_id")
+            if not title:
+                return self._err("书名不能为空")
+            result = await self.webui.update_book_title(book_id, title)
+            logger.info(f"[AutoRead WebUI] update_book_title done: {result.get('title', '')}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] update_book_title error: {exc}")
+            return self._err(str(exc))
         except ValueError as exc:
             return self._err(str(exc))
         except PermissionError as exc:

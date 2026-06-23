@@ -698,6 +698,7 @@ function renderBooksTable(items) {
       '<td>' + (b.is_active ? "是" : "-") + '</td><td>' + b.progress.percent + '% (' + b.progress.max_current_chunk_index + '/' + b.progress.total_chunks + ')</td>' +
       '<td>' + formatTime(b.created_at) + '</td><td>' +
         '<button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button> ' +
+        '<button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button> ' +
         (_deleteEnabled
           ? '<button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-book-id="' + escapeHtml(b.book_id) + '" data-book-title="' + escapeHtml(b.title) + '">删除</button>'
           : '<button type="button" class="btn btn-small btn-secondary" disabled title="删除功能未启用（请在设置中开启 webui_delete_enabled）">删除</button>') +
@@ -715,6 +716,28 @@ function loadBookDetail(bookId) {
     openPanel("book-detail-panel", function() { renderBookDetail(data); });
   }).catch(function(err) { showError("加载书籍详情失败: " + err.message); });
 }
+function saveBookTitle(bookId, inputEl, displayEl, editRow) {
+  var title = inputEl.value.trim();
+  if (!title) { showError("书名不能为空"); return; }
+  var saveBtn = editRow.querySelector("[data-action=book-title-edit-save]");
+  var cancelBtn = editRow.querySelector("[data-action=book-title-edit-cancel]");
+  if (saveBtn) saveBtn.disabled = true;
+  if (cancelBtn) cancelBtn.disabled = true;
+  apiPost("books/title/update", {book_id: bookId, title: title}).then(function(result) {
+    showMessage(result.message || "书名已更新");
+    if (displayEl) displayEl.textContent = title;
+    editRow.style.display = "none";
+    if (displayEl) displayEl.style.display = "";
+    loadBooks();
+    loadSessions();
+    loadNotes();
+  }).catch(function(err) {
+    showError("编辑书名失败: " + (err.message || "未知错误"));
+    if (saveBtn) saveBtn.disabled = false;
+    if (cancelBtn) cancelBtn.disabled = false;
+  });
+}
+
 function renderBookDetail(data) {
   var body = document.getElementById("book-detail-body");
   var sessionsHtml = data.active_sessions.length
@@ -724,7 +747,18 @@ function renderBookDetail(data) {
           ' | 状态: ' + (s.paused ? "已暂停" : "阅读中") + '<br>上次: ' + formatTime(s.last_read_at) + ' | 下次: ' + formatTime(s.next_read_at) + '</div>';
       }).join("")
     : '<p style="color:var(--muted);font-size:13px">暂无活跃会话</p>';
-  body.innerHTML = '<dl><dt>书名</dt><dd>' + escapeHtml(data.title) + '</dd>' +
+  body.innerHTML =
+    '<dl>' +
+    '<dt>书名</dt>' +
+    '<dd>' +
+      '<span id="book-detail-title-display">' + escapeHtml(data.title) + '</span>' +
+      '<span id="book-detail-title-edit-row" style="display:none">' +
+        '<input type="text" id="book-detail-title-input" value="' + escapeHtml(data.title) + '" maxlength="120" style="width:200px;padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card-bg);color:var(--text);font-size:13px" /> ' +
+        '<button type="button" class="btn btn-small btn-primary" data-action="book-title-edit-save" data-book-id="' + escapeHtml(data.book_id) + '">保存</button> ' +
+        '<button type="button" class="btn btn-small btn-secondary" data-action="book-title-edit-cancel">取消</button>' +
+      '</span> ' +
+      '<button type="button" class="btn btn-small btn-secondary" data-action="book-title-edit-start" data-book-id="' + escapeHtml(data.book_id) + '" id="book-detail-edit-btn" style="margin-left:8px">编辑</button>' +
+    '</dd>' +
     '<dt>book_id</dt><dd><code>' + escapeHtml(data.book_id) + '</code></dd>' +
     '<dt>来源</dt><dd>' + escapeHtml(data.source_type) + '</dd>' +
     '<dt>总字符数</dt><dd>' + data.total_chars.toLocaleString() + '</dd>' +
@@ -1326,6 +1360,39 @@ document.addEventListener("click", function(e) {
   if (action === "export-result-save-only") { showMessage("备份已保存在服务器备份列表中"); hideExportResult(); return; }
   if (action === "export-result-close") { hideExportResult(); return; }
   switch (action) {
+    case "book-title-edit-start":
+      (function() {
+        var displayEl = document.getElementById("book-detail-title-display");
+        var editRow = document.getElementById("book-detail-title-edit-row");
+        var input = document.getElementById("book-detail-title-input");
+        var editBtn = document.getElementById("book-detail-edit-btn");
+        if (displayEl) displayEl.style.display = "none";
+        if (editRow) editRow.style.display = "";
+        if (editBtn) editBtn.style.display = "none";
+        if (input) { input.value = (displayEl && displayEl.textContent) || ""; setTimeout(function() { input.focus(); input.select(); }, 50); }
+      })();
+      break;
+    case "book-title-edit-save":
+      (function() {
+        var bookId = target.dataset.bookId;
+        var displayEl = document.getElementById("book-detail-title-display");
+        var editRow = document.getElementById("book-detail-title-edit-row");
+        var input = document.getElementById("book-detail-title-input");
+        if (!bookId || !input) return;
+        saveBookTitle(bookId, input, displayEl, editRow);
+      })();
+      break;
+    case "book-title-edit-cancel":
+      (function() {
+        var displayEl = document.getElementById("book-detail-title-display");
+        var editRow = document.getElementById("book-detail-title-edit-row");
+        var editBtn = document.getElementById("book-detail-edit-btn");
+        var input = document.getElementById("book-detail-title-input");
+        if (displayEl) { displayEl.style.display = ""; if (input) input.value = displayEl.textContent || ""; }
+        if (editRow) editRow.style.display = "none";
+        if (editBtn) editBtn.style.display = "";
+      })();
+      break;
     case "book-detail": loadBookDetail(target.dataset.bookId); break;
     case "note-detail": loadNoteDetail(target.dataset.bookId, target.dataset.noteId); break;
     case "books-prev": loadBooks(_booksPage - 1); break;
@@ -1444,7 +1511,6 @@ var exportResultOverlay = document.getElementById("export-result-overlay");
 if (exportResultOverlay) exportResultOverlay.addEventListener("click", function(e) {
   if (e.target === exportResultOverlay && _exportResult) hideExportResult();
 });
-
 document.getElementById("btn-refresh").addEventListener("click", refreshAll);
 document.getElementById("btn-upload").addEventListener("click", uploadBook);
 document.getElementById("btn-books-search").addEventListener("click", function() { loadBooks(1); });
