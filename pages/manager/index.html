@@ -1388,13 +1388,28 @@ document.addEventListener("click", function(e) {
       (function() {
         var name = target.dataset.name;
         console.info("[autoread-ui] server-backup-restore start", {name: name});
-        confirmAction("确认从服务器备份「" + name + "」恢复吗？此操作将合并导入备份中的数据。").then(function(ok) {
-          if (!ok) { console.info("[autoread-ui] server-backup-restore cancelled"); return; }
-          console.info("[autoread-ui] server-backup-restore confirmed", {name: name});
-          apiPost("backups/restore", {name: name}).then(function(result) {
-            showMessage(result.message || "恢复完成");
-            loadOverview(); loadBooks(); loadNotes(); loadSessions();
-          }).catch(function(err) { showError("恢复失败: " + (err.message || "未知错误")); });
+        // 自动 inspect 后展示确认框
+        _doPost("backups/inspect", {name: name}, null, null).then(function(info) {
+          console.info("[autoread-ui] inspect done", info);
+          var summary = info.summary || {};
+          var warnings = (info.warnings || []).join("\n");
+          var msg = "确认从备份「" + name + "」恢复吗？\n\n" +
+            "类型: " + (info.backup_type || "?") +
+            " | 书籍: " + (summary.books_count || 0) +
+            " | 笔记: " + (summary.notes_count || 0) +
+            " | 模式: " + (info.restore_mode || "merge");
+          if (info.already_imported) msg += "\n\n⚠ 该备份已导入过，再次恢复将跳过所有记录。";
+          if (warnings) msg += "\n\n" + warnings;
+          confirmAction(msg).then(function(ok) {
+            if (!ok) { console.info("[autoread-ui] server-backup-restore cancelled"); return; }
+            console.info("[autoread-ui] server-backup-restore confirmed", {name: name});
+            apiPost("backups/restore", {name: name}).then(function(result) {
+              showMessage(result.message || "恢复完成");
+              loadOverview(); loadBooks(); loadNotes(); loadSessions();
+            }).catch(function(err) { showError("恢复失败: " + (err.message || "未知错误")); });
+          });
+        }).catch(function(err) {
+          showError("无法解析备份文件: " + (err.message || "未知错误"));
         });
       })();
       break;
@@ -1546,6 +1561,7 @@ function _doPost(endpoint, body, okMsg, refreshFn) {
       console.info("[autoread-ui] response", result);
       showMessage((result && result.message) || okMsg);
       if (refreshFn) refreshFn();
+      return result;
     }).catch(function(err) {
       console.error("[autoread-ui] request failed", err);
       throw err;
@@ -1564,6 +1580,7 @@ function _doPost(endpoint, body, okMsg, refreshFn) {
     console.info("[autoread-ui] response", result);
     showMessage((result && result.message) || okMsg);
     if (refreshFn) refreshFn();
+    return result;
   }).catch(function(err) {
     console.error("[autoread-ui] request failed", err);
     throw err;

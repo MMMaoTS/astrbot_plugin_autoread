@@ -106,8 +106,10 @@ astrbot_plugin_autoread/
 | POST | `/astrbot_plugin_autoread/backups/import/preview` | 导入预览 |
 | POST | `/astrbot_plugin_autoread/backups/import/apply` | 执行导入 |
 | POST | `/astrbot_plugin_autoread/backups/upload` | 上传备份 |
+| POST | `/astrbot_plugin_autoread/backups/inspect` | 预检备份 |
 | POST | `/astrbot_plugin_autoread/backups/restore` | 从服务器恢复 |
 | POST | `/astrbot_plugin_autoread/backups/delete` | 删除备份 |
+| POST | `/astrbot_plugin_autoread/backups/export-to-server` | 导出到服务器 |
 
 ## 添加新功能
 

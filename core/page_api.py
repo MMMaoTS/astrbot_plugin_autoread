@@ -276,6 +276,12 @@ class AutoReadWebUIAPI:
                 "List backup files on server",
             )
             ctx.register_web_api(
+                f"/{p}/backups/inspect",
+                self._inspect_backup,
+                ["POST"],
+                "Inspect server backup file",
+            )
+            ctx.register_web_api(
                 f"/{p}/backups/restore",
                 self._restore_backup,
                 ["POST"],
@@ -617,6 +623,22 @@ class AutoReadWebUIAPI:
             return self._ok({"backups": items})
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] list_backups error: {exc}")
+            return self._err(str(exc))
+
+    async def _inspect_backup(self):
+        try:
+            body = await _json_body()
+            name = str(body.get("name", "")).strip()
+            if not name:
+                return self._err("缺少备份文件名")
+            logger.info(f"[AutoRead WebUI] inspect_backup requested: {name}")
+            result = await self.webui.inspect_backup(name)
+            logger.info(f"[AutoRead WebUI] inspect_backup done: {name}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] inspect_backup error: {exc}")
             return self._err(str(exc))
 
     async def _restore_backup(self):

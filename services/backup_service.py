@@ -681,8 +681,8 @@ class BackupService:
         logger.info(f"[AutoRead Backup] Deleted backup file: {target.name}")
         return True
 
-    async def restore_from_backup(self, name: str) -> dict:
-        """从 backups 目录中的备份文件恢复。"""
+    async def inspect_backup(self, name: str) -> dict:
+        """解析/预检服务器上的备份文件，返回元信息。"""
         safe_name = Path(name).name
         if safe_name != name or ".." in name:
             raise ValueError("无效的文件名")
@@ -692,7 +692,6 @@ class BackupService:
         if not zipfile.is_zipfile(target):
             raise ValueError("不是有效的 zip 备份包")
 
-        # 读取 manifest 校验基本结构
         with zipfile.ZipFile(target, "r") as zf:
             if "manifest.json" not in zf.namelist():
                 raise ValueError("备份包缺少 manifest.json")
@@ -701,7 +700,55 @@ class BackupService:
             if backup_type not in ("books", "notes", "full"):
                 raise ValueError(f"未知备份类型: {backup_type}")
 
-        # 执行合并导入
+            # 统计概览
+            books_count = 0
+            notes_count = 0
+            for entry in zf.namelist():
+                if entry.startswith("books/") and not entry.endswith("/"):
+                    books_count += 1
+                elif entry.startswith("notes/") and entry.endswith(".jsonl"):
+                    try:
+                        content = zf.read(entry).decode("utf-8")
+                        notes_count += sum(1 for line in content.splitlines() if line.strip())
+                    except Exception:
+                        continue
+
+            already = self._is_backup_imported(manifest.get("backup_id", ""))
+
+        stat = target.stat()
+        return {
+            "name": safe_name,
+            "size": stat.st_size,
+            "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone(timedelta(hours=8))).isoformat(),
+            "backup_id": manifest.get("backup_id", "unknown"),
+            "backup_type": backup_type,
+            "schema_version": manifest.get("schema_version", 1),
+            "created_at": manifest.get("created_at", ""),
+            "already_imported": already,
+            "summary": {"books_count": books_count, "notes_count": notes_count},
+            "restore_mode": "merge",
+            "warnings": ["恢复将以合并模式导入，已有 ID 自动跳过。不会覆盖现有数据。"] if not already else ["该备份已导入过，再次恢复将跳过所有记录。"],
+        }
+
+    async def restore_from_backup(self, name: str) -> dict:
+        """从 backups 目录中的备份文件恢复。自动解析，无需手动 preview。"""
+        safe_name = Path(name).name
+        if safe_name != name or ".." in name:
+            raise ValueError("无效的文件名")
+        target = self.backups_dir / safe_name
+        if not target.exists():
+            raise ValueError(f"备份文件不存在: {safe_name}")
+        if not zipfile.is_zipfile(target):
+            raise ValueError("不是有效的 zip 备份包")
+
+        with zipfile.ZipFile(target, "r") as zf:
+            if "manifest.json" not in zf.namelist():
+                raise ValueError("备份包缺少 manifest.json")
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+
+        backup_id = manifest.get("backup_id", "unknown")
+        self._previewed_backup_ids.add(backup_id)
+
         class _FileUpload:
             def __init__(self, path):
                 self.filename = path.name
@@ -710,11 +757,6 @@ class BackupService:
                 return target.read_bytes()
 
         upload = _FileUpload(target)
-        result = await self.import_backup_merge(upload)
-        # import_backup_merge 要求先 preview，这里直接跳过 preview 检查
-        # 设置 previewed_backup_ids 以通过检查
-        backup_id = manifest.get("backup_id", "unknown")
-        self._previewed_backup_ids.add(backup_id)
         result = await self.import_backup_merge(upload)
         logger.info(f"[AutoRead Backup] Restored from server backup: {safe_name}")
         return result

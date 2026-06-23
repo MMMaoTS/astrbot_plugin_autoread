@@ -719,6 +719,11 @@ class WebUIService:
             raise ValueError(f"备份文件不存在: {name}")
         return {"deleted": True, "name": name, "message": f"已删除备份: {name}"}
 
+    async def inspect_backup(self, name: str) -> dict:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.inspect_backup(name)
+
     async def restore_backup(self, name: str) -> dict:
         if self.backup_service is None:
             raise RuntimeError("备份服务未初始化")
