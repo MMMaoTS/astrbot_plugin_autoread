@@ -269,6 +269,42 @@ class AutoReadWebUIAPI:
                 ["GET"],
                 "Get capabilities and config status",
             )
+            ctx.register_web_api(
+                f"/{p}/backups",
+                self._list_backups,
+                ["GET"],
+                "List backup files on server",
+            )
+            ctx.register_web_api(
+                f"/{p}/backups/restore",
+                self._restore_backup,
+                ["POST"],
+                "Restore from server backup file",
+            )
+            ctx.register_web_api(
+                f"/{p}/backups/upload",
+                self._upload_backup,
+                ["POST"],
+                "Upload backup file to server",
+            )
+            ctx.register_web_api(
+                f"/{p}/backups/delete",
+                self._delete_backup,
+                ["POST"],
+                "Delete server backup file",
+            )
+            ctx.register_web_api(
+                f"/{p}/backups/download/<name>",
+                self._download_backup,
+                ["GET"],
+                "Download server backup file",
+            )
+            ctx.register_web_api(
+                f"/{p}/backups/export-to-server",
+                self._export_to_server,
+                ["POST"],
+                "Export backup to server and return metadata",
+            )
             logger.info("[AutoRead WebUI] WebUI API routes registered")
         except Exception:
             logger.exception("[AutoRead WebUI] Failed to register web routes")
@@ -569,4 +605,94 @@ class AutoReadWebUIAPI:
             return self._ok(await self.webui.get_status())
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] get_status error: {exc}")
+            return self._err(str(exc))
+
+    # ==================================================================
+    # 备份管理
+    # ==================================================================
+
+    async def _list_backups(self):
+        try:
+            items = await self.webui.list_backups()
+            return self._ok({"backups": items})
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] list_backups error: {exc}")
+            return self._err(str(exc))
+
+    async def _restore_backup(self):
+        try:
+            body = await _json_body()
+            name = str(body.get("name", "")).strip()
+            if not name:
+                return self._err("缺少备份文件名")
+            logger.info(f"[AutoRead WebUI] restore_backup requested: {name}")
+            result = await self.webui.restore_backup(name)
+            logger.info(f"[AutoRead WebUI] restore_backup done: {name}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] restore_backup error: {exc}")
+            return self._err(str(exc))
+
+    async def _upload_backup(self):
+        try:
+            files = await _upload_files()
+            upload = files.get("file") if files else None
+            if upload is None:
+                return self._err("缺少上传文件 (字段名: file)")
+            wrapped = _AsyncUploadFile(upload)
+            result = await self.webui.upload_backup_file(wrapped)
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] upload_backup error: {exc}")
+            return self._err(str(exc))
+
+    async def _delete_backup(self):
+        try:
+            body = await _json_body()
+            name = str(body.get("name", "")).strip()
+            if not name:
+                return self._err("缺少备份文件名")
+            logger.info(f"[AutoRead WebUI] delete_backup requested: {name}")
+            result = await self.webui.delete_backup(name)
+            logger.info(f"[AutoRead WebUI] delete_backup done: {name}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] delete_backup error: {exc}")
+            return self._err(str(exc))
+
+    async def _download_backup(self, name: str):
+        """下载服务器备份文件。返回 FileResponse 或错误 JSON。"""
+        try:
+            path = self.webui.get_backup_file_path(name)
+            if path is None:
+                return self._err("备份文件不存在或文件名不合法")
+            logger.info(
+                f"[AutoRead WebUI] download_backup: {name} ({path.stat().st_size} bytes)"
+            )
+            return FileResponse(str(path), filename=path.name)
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] download_backup error: {exc}")
+            return self._err(str(exc))
+
+    async def _export_to_server(self):
+        """导出备份到服务器，返回元信息（不触发下载）。"""
+        try:
+            body = await _json_body()
+            backup_type = str(body.get("type", "full")).strip()
+            if backup_type not in ("books", "notes", "full"):
+                return self._err("无效的备份类型，可选: books, notes, full")
+            logger.info(f"[AutoRead WebUI] export_to_server requested: type={backup_type}")
+            result = await self.webui.export_to_server(backup_type)
+            logger.info(f"[AutoRead WebUI] export_to_server done: {result.get('name', '?')}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] export_to_server error: {exc}")
             return self._err(str(exc))

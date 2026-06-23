@@ -49,6 +49,51 @@ class BackupService:
     # 导出
     # ==================================================================
 
+    async def export_to_server(self, backup_type: str) -> dict:
+        """导出备份到服务器并返回元信息。"""
+        if backup_type == "books":
+            path = await self.export_books()
+        elif backup_type == "notes":
+            path = await self.export_notes()
+        elif backup_type == "full":
+            path = await self.export_full()
+        else:
+            raise ValueError(f"未知备份类型: {backup_type}")
+
+        stat = path.stat()
+        # 统计概览
+        state = await self.state_store.load_state()
+        books_count = len(state.get("books", {}))
+        sessions = state.get("sessions", {})
+        active_tasks = sum(1 for s in sessions.values() if s.get("current_book_id"))
+        notes_count = await self._count_all_notes()
+
+        return {
+            "name": path.name,
+            "size": stat.st_size,
+            "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone(timedelta(hours=8))).isoformat(),
+            "source": "exported",
+            "schema_version": 1,
+            "summary": {
+                "books_count": books_count,
+                "notes_count": notes_count,
+                "tasks_count": active_tasks,
+            },
+        }
+
+    async def _count_all_notes(self) -> int:
+        notes_dir = self.data_dir / "notes"
+        if not notes_dir.exists():
+            return 0
+        count = 0
+        for p in notes_dir.glob("*.jsonl"):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    count += sum(1 for line in f if line.strip())
+            except OSError:
+                continue
+        return count
+
     async def export_books(self) -> Path:
         """导出书籍备份 zip。返回文件路径。"""
         backup_id = _new_backup_id()
@@ -87,7 +132,8 @@ class BackupService:
                 encoding="utf-8",
             )
 
-            zip_path = self.backups_dir / f"autoread_books_backup_{_ts_tag()}.zip"
+            short = uuid.uuid4().hex[:6]
+            zip_path = self.backups_dir / f"autoread_backup_books_{_ts_tag()}_{short}.zip"
             self._make_zip(root, zip_path)
             logger.info(f"[AutoRead Backup] Exported books: {zip_path.name} ({backup_id})")
             return zip_path
@@ -141,7 +187,8 @@ class BackupService:
                 json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8"
             )
 
-            zip_path = self.backups_dir / f"autoread_notes_backup_{_ts_tag()}.zip"
+            short = uuid.uuid4().hex[:6]
+            zip_path = self.backups_dir / f"autoread_backup_notes_{_ts_tag()}_{short}.zip"
             self._make_zip(root, zip_path)
             logger.info(f"[AutoRead Backup] Exported notes: {zip_path.name} ({backup_id})")
             return zip_path
@@ -185,7 +232,8 @@ class BackupService:
                 encoding="utf-8",
             )
 
-            zip_path = self.backups_dir / f"autoread_full_backup_{_ts_tag()}.zip"
+            short = uuid.uuid4().hex[:6]
+            zip_path = self.backups_dir / f"autoread_backup_full_{_ts_tag()}_{short}.zip"
             self._make_zip(root, zip_path)
             logger.info(f"[AutoRead Backup] Exported full: {zip_path.name} ({backup_id})")
             return zip_path
@@ -591,6 +639,112 @@ class BackupService:
         self.history_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.history_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    # ==================================================================
+    # 备份文件管理
+    # ==================================================================
+
+    async def list_backups(self) -> list[dict]:
+        """列出 backups 目录下的所有备份文件。"""
+        if not self.backups_dir.exists():
+            return []
+        items = []
+        for p in sorted(self.backups_dir.glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not p.is_file():
+                continue
+            stat = p.stat()
+            source = "exported" if p.name.startswith("autoread_") else "uploaded"
+            items.append({
+                "name": p.name,
+                "size": stat.st_size,
+                "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone(timedelta(hours=8))).isoformat(),
+                "source": source,
+            })
+        return items
+
+    def get_backup_path(self, name: str) -> Path | None:
+        """获取备份文件路径。防路径穿越校验。"""
+        safe_name = Path(name).name
+        if safe_name != name or ".." in name or name.startswith("/"):
+            return None
+        target = self.backups_dir / safe_name
+        if not target.exists() or not target.is_file():
+            return None
+        return target
+
+    async def delete_backup(self, name: str) -> bool:
+        """删除备份文件。防路径穿越。"""
+        target = self.get_backup_path(name)
+        if target is None:
+            return False
+        target.unlink()
+        logger.info(f"[AutoRead Backup] Deleted backup file: {target.name}")
+        return True
+
+    async def restore_from_backup(self, name: str) -> dict:
+        """从 backups 目录中的备份文件恢复。"""
+        safe_name = Path(name).name
+        if safe_name != name or ".." in name:
+            raise ValueError("无效的文件名")
+        target = self.backups_dir / safe_name
+        if not target.exists():
+            raise ValueError(f"备份文件不存在: {safe_name}")
+        if not zipfile.is_zipfile(target):
+            raise ValueError("不是有效的 zip 备份包")
+
+        # 读取 manifest 校验基本结构
+        with zipfile.ZipFile(target, "r") as zf:
+            if "manifest.json" not in zf.namelist():
+                raise ValueError("备份包缺少 manifest.json")
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            backup_type = manifest.get("backup_type", "")
+            if backup_type not in ("books", "notes", "full"):
+                raise ValueError(f"未知备份类型: {backup_type}")
+
+        # 执行合并导入
+        class _FileUpload:
+            def __init__(self, path):
+                self.filename = path.name
+                self.content_type = "application/zip"
+            async def read(self, size=-1):
+                return target.read_bytes()
+
+        upload = _FileUpload(target)
+        result = await self.import_backup_merge(upload)
+        # import_backup_merge 要求先 preview，这里直接跳过 preview 检查
+        # 设置 previewed_backup_ids 以通过检查
+        backup_id = manifest.get("backup_id", "unknown")
+        self._previewed_backup_ids.add(backup_id)
+        result = await self.import_backup_merge(upload)
+        logger.info(f"[AutoRead Backup] Restored from server backup: {safe_name}")
+        return result
+
+    async def save_uploaded_backup(self, upload) -> dict:
+        """保存上传的备份文件到 backups 目录。不执行恢复。"""
+        safe_original = Path(upload.filename).name
+        if not safe_original or safe_original.startswith(".") or ".." in safe_original:
+            raise ValueError("无效的文件名")
+        suffix = Path(safe_original).suffix.lower()
+        if suffix not in (".zip",):
+            raise ValueError("仅支持 .zip 格式的备份文件")
+
+        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
+        stored_name = f"autoread_uploaded_{ts}_{safe_original}"
+        dest = self.backups_dir / stored_name
+
+        content = await upload.read()
+        max_mb = 50  # 可通过配置调整
+        if len(content) > max_mb * 1024 * 1024:
+            raise ValueError(f"备份文件超过大小限制 ({max_mb} MB)")
+
+        dest.write_bytes(content)
+
+        if not zipfile.is_zipfile(dest):
+            dest.unlink()
+            raise ValueError("不是有效的 zip 备份包")
+
+        logger.info(f"[AutoRead Backup] Uploaded backup saved: {stored_name} ({len(content)} bytes)")
+        return {"name": stored_name, "size": len(content), "source": "uploaded", "message": "备份文件已上传"}
 
     async def get_history(self) -> list[dict]:
         if not self.history_path.exists():

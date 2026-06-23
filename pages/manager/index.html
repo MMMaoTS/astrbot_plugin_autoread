@@ -386,6 +386,20 @@ tr:hover td { background: rgba(0,0,0,0.02); }
       </tr></thead><tbody id="backup-history-tbody"></tbody></table>
     </div>
   </section>
+
+  <section class="backup-server">
+    <h2>服务器备份管理</h2>
+    <p class="hint" style="margin-bottom:12px">服务器上的备份文件。可上传、恢复或删除。</p>
+    <div class="upload-row">
+      <input type="file" id="server-backup-upload" accept=".zip" />
+      <button type="button" id="btn-server-backup-upload" class="btn btn-primary">上传到服务器</button>
+    </div>
+    <div class="table-wrap" style="margin-top:12px">
+      <table><thead><tr>
+        <th>文件名</th><th>大小</th><th>修改时间</th><th>来源</th><th>操作</th>
+      </tr></thead><tbody id="server-backups-tbody"></tbody></table>
+    </div>
+  </section>
 </div>
 
 <!-- 书籍详情面板 -->
@@ -408,6 +422,19 @@ tr:hover td { background: rgba(0,0,0,0.02); }
     <div class="modal-btns">
       <button type="button" class="btn btn-secondary" data-action="confirm-cancel">取消</button>
       <button type="button" class="btn btn-primary" data-action="confirm-ok">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- 导出备份结果弹窗 -->
+<div id="export-result-overlay" class="modal-overlay hidden">
+  <div class="modal-card" style="max-width:420px">
+    <h3>备份已生成</h3>
+    <div id="export-result-body" class="modal-msg"></div>
+    <div class="modal-btns">
+      <button type="button" class="btn btn-secondary" data-action="export-result-close">关闭</button>
+      <button type="button" class="btn btn-secondary" data-action="export-result-save-only">仅保存到服务器</button>
+      <button type="button" class="btn btn-primary" id="btn-export-result-download" data-action="export-result-download">下载备份</button>
     </div>
   </div>
 </div>
@@ -1064,27 +1091,57 @@ function getGroupForKey(key) {
 // Backup
 // ======================================================================
 
-function exportBackup(type) {
-  var endpoint = "backup/export/" + type;
-  var filename = "autoread_" + type + "_backup.zip";
-  if (_bridgeAvailable) {
-    return bridge.download(endpoint, {}, filename).catch(function(err) {
-      showError("导出失败: " + (err.message || "未知错误"));
-    });
+var _exportResult = null; // {name, size, ...}
+
+function _dispositionFilename(r) {
+  var cd = r.headers.get("content-disposition") || "";
+  var m = cd.match(/filename\*=UTF-8''(.+)/) || cd.match(/filename="?(.+?)"?$/);
+  return (m && m[1]) || null;
+}
+
+function humanSize(bytes) {
+  if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+  if (bytes > 1024) return (bytes / 1024).toFixed(0) + " KB";
+  return bytes + " B";
+}
+
+function showExportResult(data) {
+  _exportResult = data;
+  var body = document.getElementById("export-result-body");
+  var summary = data.summary || {};
+  body.innerHTML =
+    '<dl style="text-align:left;font-size:13px">' +
+    '<dt>文件名</dt><dd><code>' + escapeHtml(data.name) + '</code></dd>' +
+    '<dt>大小</dt><dd>' + humanSize(data.size || 0) + '</dd>' +
+    '<dt>时间</dt><dd>' + formatTime(data.mtime) + '</dd>' +
+    '<dt>来源</dt><dd>' + escapeHtml(data.source || "exported") + '</dd>' +
+    '<dt>书籍</dt><dd>' + (summary.books_count || 0) + ' 本</dd>' +
+    '<dt>笔记</dt><dd>' + (summary.notes_count || 0) + ' 条</dd>' +
+    '<dt>任务</dt><dd>' + (summary.tasks_count || 0) + ' 个</dd>' +
+    '</dl>';
+  document.getElementById("export-result-overlay").classList.remove("hidden");
+}
+
+function hideExportResult() {
+  document.getElementById("export-result-overlay").classList.add("hidden");
+  _exportResult = null;
+}
+
+function doExportDownload() {
+  if (!_exportResult || !_exportResult.name) {
+    showError("缺少备份文件名，无法下载"); return;
   }
-  // fetch 兜底下载
-  var url = API_BASE + "/" + endpoint.replace(/^\/+/, "");
-  return fetch(_fetchAuthUrl(url), { credentials: "same-origin" }).then(function(r) {
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    return r.blob();
-  }).then(function(blob) {
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function() { URL.revokeObjectURL(a.href); }, 0);
+  downloadServerBackup(_exportResult.name);
+  hideExportResult();
+}
+
+// 新的导出流程：生成到服务器 → 弹窗展示 → 用户选择下载/保存/关闭
+function exportBackup(type) {
+  console.info("[autoread-ui] export-to-server", {type: type});
+  _doPost("backups/export-to-server", {type: type}, "备份已生成", function() {
+    loadServerBackups();
+  }).then(function(result) {
+    if (result) showExportResult(result);
   }).catch(function(err) {
     showError("导出失败: " + (err.message || "未知错误"));
   });
@@ -1171,10 +1228,78 @@ function loadBackupHistory() {
 }
 
 // ======================================================================
+// 服务器备份管理
+// ======================================================================
+function loadServerBackups() {
+  return apiGet("backups", {}).then(function(data) {
+    renderServerBackups(data.backups || []);
+  }).catch(function(err) { console.error("loadServerBackups:", err); });
+}
+
+function downloadServerBackup(name) {
+  console.info("[autoread-ui] downloadServerBackup", {name: name});
+  if (_bridgeAvailable) {
+    return bridge.download("backups/download/" + encodeURIComponent(name), {}, name).catch(function(err) {
+      showError("下载备份失败: " + (err.message || "未知错误"));
+    });
+  }
+  // fetch 兜底
+  var url = API_BASE + "/backups/download/" + encodeURIComponent(name);
+  fetch(_fetchAuthUrl(url), { credentials: "same-origin" }).then(function(r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.blob();
+  }).then(function(blob) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function() { URL.revokeObjectURL(a.href); }, 0);
+  }).catch(function(err) {
+    showError("下载备份失败: " + (err.message || "未知错误"));
+  });
+}
+
+function renderServerBackups(items) {
+  var tbody = document.getElementById("server-backups-tbody");
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无服务器备份文件。导出备份或上传备份文件后在此处管理。</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(function(b) {
+    var sizeStr = b.size > 1048576 ? (b.size / 1048576).toFixed(1) + " MB" : (b.size / 1024).toFixed(0) + " KB";
+    return '<tr><td><code>' + escapeHtml(b.name) + '</code></td>' +
+      '<td>' + sizeStr + '</td><td>' + formatTime(b.mtime) + '</td>' +
+      '<td>' + (b.source === "exported" ? "导出" : "上传") + '</td>' +
+      '<td>' +
+        '<button type="button" class="btn btn-small btn-secondary" data-action="server-backup-download" data-name="' + escapeHtml(b.name) + '">下载</button> ' +
+        '<button type="button" class="btn btn-small btn-secondary" data-action="server-backup-restore" data-name="' + escapeHtml(b.name) + '">恢复</button> ' +
+        '<button type="button" class="btn btn-small btn-danger" data-action="server-backup-delete" data-name="' + escapeHtml(b.name) + '">删除</button>' +
+      '</td></tr>';
+  }).join("");
+}
+
+function uploadServerBackup() {
+  var input = document.getElementById("server-backup-upload");
+  var file = input.files[0];
+  if (!file) { showError("请先选择备份文件"); return; }
+  if (!file.name.toLowerCase().endsWith(".zip")) { showError("仅支持 .zip 备份文件"); return; }
+  var btn = document.getElementById("btn-server-backup-upload");
+  btn.disabled = true; btn.textContent = "上传中...";
+  uploadFile("backups/upload", file).then(function(result) {
+    showMessage(result.message || "上传完成");
+    input.value = "";
+    loadServerBackups();
+  }).catch(function(err) { showError("上传备份失败: " + (err.message || "未知错误")); })
+  .finally(function() { btn.disabled = false; btn.textContent = "上传到服务器"; });
+}
+
+// ======================================================================
 // Refresh all
 // ======================================================================
 function refreshAll() {
-  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes(), loadBackupHistory(), loadUploadSettings()]).then(function() {
+  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes(), loadBackupHistory(), loadServerBackups(), loadUploadSettings()]).then(function() {
     return apiGet("books", { page: 1, page_size: 100 }).then(function(data) {
       updateNotesBookFilter(data.items);
     }).catch(function() {});
@@ -1197,6 +1322,9 @@ document.addEventListener("click", function(e) {
     if (_confirmResolve) _confirmResolve(false);
     return;
   }
+  if (action === "export-result-download") { doExportDownload(); return; }
+  if (action === "export-result-save-only") { showMessage("备份已保存在服务器备份列表中"); hideExportResult(); return; }
+  if (action === "export-result-close") { hideExportResult(); return; }
   switch (action) {
     case "book-detail": loadBookDetail(target.dataset.bookId); break;
     case "note-detail": loadNoteDetail(target.dataset.bookId, target.dataset.noteId); break;
@@ -1249,6 +1377,41 @@ document.addEventListener("click", function(e) {
         });
       })();
       break;
+    case "server-backup-download":
+      (function() {
+        var name = target.dataset.name;
+        console.info("[autoread-ui] server-backup-download", {name: name});
+        downloadServerBackup(name);
+      })();
+      break;
+    case "server-backup-restore":
+      (function() {
+        var name = target.dataset.name;
+        console.info("[autoread-ui] server-backup-restore start", {name: name});
+        confirmAction("确认从服务器备份「" + name + "」恢复吗？此操作将合并导入备份中的数据。").then(function(ok) {
+          if (!ok) { console.info("[autoread-ui] server-backup-restore cancelled"); return; }
+          console.info("[autoread-ui] server-backup-restore confirmed", {name: name});
+          apiPost("backups/restore", {name: name}).then(function(result) {
+            showMessage(result.message || "恢复完成");
+            loadOverview(); loadBooks(); loadNotes(); loadSessions();
+          }).catch(function(err) { showError("恢复失败: " + (err.message || "未知错误")); });
+        });
+      })();
+      break;
+    case "server-backup-delete":
+      (function() {
+        var name = target.dataset.name;
+        console.info("[autoread-ui] server-backup-delete start", {name: name});
+        confirmAction("确认删除服务器备份文件「" + name + "」吗？此操作不可撤销。").then(function(ok) {
+          if (!ok) { console.info("[autoread-ui] server-backup-delete cancelled"); return; }
+          console.info("[autoread-ui] server-backup-delete confirmed", {name: name});
+          apiPost("backups/delete", {name: name}).then(function(result) {
+            showMessage(result.message || "已删除");
+            loadServerBackups();
+          }).catch(function(err) { showError("删除备份失败: " + (err.message || "未知错误")); });
+        });
+      })();
+      break;
     default:
       console.warn("[autoread-ui] unhandled action", action, target.dataset);
   }
@@ -1261,6 +1424,10 @@ document.addEventListener("click", function(e) {
 var confirmOverlay = document.getElementById("confirm-overlay");
 if (confirmOverlay) confirmOverlay.addEventListener("click", function(e) {
   if (e.target === confirmOverlay && _confirmResolve) _confirmResolve(false);
+});
+var exportResultOverlay = document.getElementById("export-result-overlay");
+if (exportResultOverlay) exportResultOverlay.addEventListener("click", function(e) {
+  if (e.target === exportResultOverlay && _exportResult) hideExportResult();
 });
 
 document.getElementById("btn-refresh").addEventListener("click", refreshAll);
@@ -1295,6 +1462,8 @@ document.getElementById("btn-export-notes").addEventListener("click", function()
 document.getElementById("btn-export-full").addEventListener("click", function() { exportBackup("full"); });
 document.getElementById("btn-backup-parse").addEventListener("click", parseBackup);
 document.getElementById("btn-backup-import").addEventListener("click", importBackup);
+var btnServerUpload = document.getElementById("btn-server-backup-upload");
+if (btnServerUpload) btnServerUpload.addEventListener("click", uploadServerBackup);
 
 // 删除 / 任务管理 / 错误清除按钮
 var btnClearError = document.getElementById("btn-clear-error");
@@ -1327,6 +1496,7 @@ document.addEventListener("click", function(e) {
 document.addEventListener("keydown", function(e) {
   if (e.key === "Escape") {
     if (_confirmResolve) { _confirmResolve(false); return; }
+    if (_exportResult) { hideExportResult(); return; }
     closePanel();
   }
 });

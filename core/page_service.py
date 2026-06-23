@@ -687,4 +687,57 @@ class WebUIService:
                 "webui_delete_enabled": delete_enabled,
                 "webui_last_error_ttl_minutes": ttl,
             },
+            "capabilities_extended": {
+                "backup_list": True,
+                "backup_export": True,
+                "backup_upload": True,
+                "backup_restore": True,
+                "backup_delete": delete_enabled,
+                "note_delete_by_webui": delete_enabled,
+                "note_delete_by_natural_language": False,
+                "note_restore_from_backup": True,
+                "note_manual_create": False,
+                "note_manual_edit": False,
+                "reread_by_natural_language": True,
+            },
         }
+
+    # ------------------------------------------------------------------
+    # 备份管理
+    # ------------------------------------------------------------------
+
+    async def list_backups(self) -> list[dict]:
+        if self.backup_service is None:
+            return []
+        return await self.backup_service.list_backups()
+
+    async def delete_backup(self, name: str) -> dict:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        ok = await self.backup_service.delete_backup(name)
+        if not ok:
+            raise ValueError(f"备份文件不存在: {name}")
+        return {"deleted": True, "name": name, "message": f"已删除备份: {name}"}
+
+    async def restore_backup(self, name: str) -> dict:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        result = await self.backup_service.restore_from_backup(name)
+        return {"restored": True, "name": name, **result}
+
+    async def upload_backup_file(self, upload) -> dict:
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.save_uploaded_backup(upload)
+
+    async def export_to_server(self, backup_type: str) -> dict:
+        """导出备份到服务器并返回元信息。"""
+        if self.backup_service is None:
+            raise RuntimeError("备份服务未初始化")
+        return await self.backup_service.export_to_server(backup_type)
+
+    def get_backup_file_path(self, name: str) -> Path | None:
+        """获取备份文件路径（用于下载）。防路径穿越。"""
+        if self.backup_service is None:
+            return None
+        return self.backup_service.get_backup_path(name)

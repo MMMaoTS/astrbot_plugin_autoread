@@ -1,23 +1,28 @@
 # ARCHITECTURE
 
-AutoRead 采用双入口、单业务核心架构。
+AutoRead 采用多入口、单业务核心架构。
 
 ## 层级
 
 ```text
 main.py
-  ├── /read commands
-  ├── @filter.llm_tool tools
-  └── lifecycle: worker start / terminate
+  ├── /read commands              # 命令入口
+  ├── @filter.llm_tool tools      # 自然语言工具入口
+  ├── lifecycle: worker start / terminate
+  └── WebUI API registration
         ↓
 services/autoread_service.py
         ↓
-services/reading_state.py
-services/book_loader.py
-services/text_chunker.py
-services/note_writer.py
-services/memory_bridge.py
-worker/reading_worker.py
+repositories/reading_state_repository.py   # state.json 持久化
+services/book_loader.py                    # 书籍导入
+services/text_chunker.py                   # 文本切片
+services/note_writer.py                    # LLM 笔记生成
+services/memory_bridge.py                  # 外部记忆桥接
+services/backup_service.py                 # 备份导入/导出/管理
+core/page_api.py                           # WebUI API 路由
+core/page_service.py                       # WebUI 业务编排
+core/config_service.py                     # 配置管理
+worker/reading_worker.py                   # 后台轮询
 ```
 
 ## 入口层
@@ -25,8 +30,9 @@ worker/reading_worker.py
 入口层 (`main.py`) 只负责事件适配，不包含业务逻辑：
 
 - `/read` 命令组：调试、管理、兜底入口
-- `@filter.llm_tool`：自然对话工具入口
+- `@filter.llm_tool`：自然对话工具入口（9 个工具：list_books, choose_book, start_book, read_next, get_status, get_notes, pause, resume, stop）
 - 生命周期管理：worker 启动与销毁
+- WebUI API 注册：通过 `context.register_web_api` 注册 30 条路由
 
 ## 业务层
 
@@ -37,12 +43,23 @@ worker/reading_worker.py
 - `get_status` / `get_notes`
 - `pause` / `resume` / `stop`
 
+## WebUI 层
+
+`AutoReadWebUIAPI` (`core/page_api.py`) 注册所有 WebUI API 路由，`WebUIService` (`core/page_service.py`) 编排业务逻辑。支持：
+
+- 概览、书籍管理、笔记管理、阅读任务管理
+- 设置读写、provider 列表
+- 备份导入/导出/管理（列表、下载、上传、恢复、删除）
+- 错误管理（查看、清除、TTL 过期）
+- 删除功能（受 `webui_delete_enabled` 开关控制）
+- 状态查询（capabilities/config）
+
 ## 状态层
 
 `ReadingStateStore` 管理：
 
 - `state.json`：会话状态、书籍元数据
-- notes jsonl：阅读笔记追加
+- notes jsonl：阅读笔记追加与原子删除
 - 原子写入与并发锁
 
 ## LLM 层
