@@ -66,9 +66,7 @@ class AutoReadPlugin(Star):
         self.state_store = ReadingStateStore(self.data_dir)
         self.book_loader = BookLoader(
             data_dir=self.data_dir,
-            allowed_extensions=list(
-                self.config_service.get("allowed_extensions", [".txt", ".md"])
-            ),
+            allowed_extensions=self.config_service.get("allowed_extensions", [".txt", ".md"]),
         )
         self.chunker = TextChunker(
             chunk_size=int(self.config_service.get("chunk_size", 1800)),
@@ -125,8 +123,31 @@ class AutoReadPlugin(Star):
             context=self.context,
             webui_service=self.webui_service,
         )
-        if self.config_service.get("webui_enabled", True):
-            self.webui_api.register_routes()
+
+        # --- WebUI API 注册 ---
+        webui_enabled = self.config_service.get("webui_enabled", True)
+        logger.info(
+            f"[AutoRead] WebUI enabled={webui_enabled}, "
+            f"register_web_api={'available' if hasattr(self.context, 'register_web_api') else 'missing'}"
+        )
+        if webui_enabled:
+            if not hasattr(self.context, "register_web_api"):
+                logger.warning(
+                    "[AutoRead] WebUI API 不可用：当前 AstrBot 版本不支持 register_web_api。"
+                    " WebUI 页面将无法连接后端。"
+                )
+            else:
+                try:
+                    self.webui_api.register_routes()
+                except Exception:
+                    logger.exception(
+                        "[AutoRead] WebUI API 路由注册失败！WebUI 页面将无法连接后端。"
+                    )
+        else:
+            logger.info(
+                "[AutoRead] WebUI API 已按配置关闭（webui_enabled=false）。"
+                " 可在插件原生设置 → 页面设置 → 启用页面 中开启。"
+            )
 
     # ==================================================================
     # 生命周期

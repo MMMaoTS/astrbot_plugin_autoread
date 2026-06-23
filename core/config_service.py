@@ -61,6 +61,32 @@ _BOOL_KEYS = frozenset({
     "enable_stage_routing", "enable_deeper_review",
 })
 
+# 列表类型字段（AstrBot 原生设置面板可能将 list 存为 JSON 字符串）
+_LIST_KEYS = frozenset({
+    "allowed_extensions",
+})
+
+
+def _normalize_list_value(value):
+    """将 JSON 字符串或逗号分隔字符串规范化为 Python list。"""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        # 尝试 JSON 解析（AstrBot 可能将 list 序列化为 JSON 字符串）
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+        # 逗号分隔回退
+        return [item.strip() for item in stripped.split(",") if item.strip()]
+    return []
+
 
 def _load_schema_defaults() -> dict[str, dict]:
     """Load grouped defaults from the plugin configuration schema.
@@ -100,7 +126,10 @@ class ConfigService:
     # ------------------------------------------------------------------
 
     def get(self, key: str, default=None):
-        """读取配置值。支持点号路径如 Model_Settings.model_strategy，也支持扁平 key。"""
+        """读取配置值。支持点号路径如 Model_Settings.model_strategy，也支持扁平 key。
+
+        列表类型字段会自动规范化（JSON 字符串 → list）。
+        """
         if "." in key:
             parts = key.split(".")
             node = self._config
@@ -109,14 +138,22 @@ class ConfigService:
                     node = node.get(p)
                 else:
                     return default
-            return node if node is not None else default
-        group = _FLAT_TO_GROUP.get(key)
-        if group:
-            group_dict = self._config.get(group, {})
-            if isinstance(group_dict, dict) and key in group_dict:
-                return group_dict[key]
-        val = self._config.get(key)
-        return val if val is not None else default
+            result = node if node is not None else default
+        else:
+            group = _FLAT_TO_GROUP.get(key)
+            if group:
+                group_dict = self._config.get(group, {})
+                if isinstance(group_dict, dict) and key in group_dict:
+                    result = group_dict[key]
+                else:
+                    result = default
+            else:
+                val = self._config.get(key)
+                result = val if val is not None else default
+
+        if key in _LIST_KEYS and result is not None:
+            return _normalize_list_value(result)
+        return result
 
     async def get_async(self, key: str, default=None):
         return self.get(key, default)
@@ -128,7 +165,13 @@ class ConfigService:
             if not isinstance(group_dict, dict):
                 group_dict = {}
             group_defaults = _SCHEMA_DEFAULTS.get(group, {})
-            result[group] = {k: group_dict.get(k, group_defaults.get(k)) for k in keys}
+            normalized = {}
+            for k in keys:
+                v = group_dict.get(k, group_defaults.get(k))
+                if k in _LIST_KEYS and v is not None:
+                    v = _normalize_list_value(v)
+                normalized[k] = v
+            result[group] = normalized
         return result
 
     # ------------------------------------------------------------------
@@ -160,17 +203,26 @@ class ConfigService:
                 for key, value in top_val.items():
                     if key not in _GROUP_KEYS.get(group, frozenset()):
                         raise ValueError(f"不允许修改的配置项: {group}.{key}")
+                    value = self._normalize_value(key, value)
                     self._validate_key(key, value)
                     cleaned[key] = value
                 if cleaned:
                     cleaned_by_group[group] = cleaned
             elif _FLAT_TO_GROUP.get(top_key):
                 group = _FLAT_TO_GROUP[top_key]
+                top_val = self._normalize_value(top_key, top_val)
                 self._validate_key(top_key, top_val)
                 cleaned_by_group.setdefault(group, {})[top_key] = top_val
             else:
                 raise ValueError(f"未知配置项: {top_key}")
         return cleaned_by_group
+
+    @staticmethod
+    def _normalize_value(key: str, value):
+        """保存前规范化值类型。"""
+        if key in _LIST_KEYS:
+            return _normalize_list_value(value)
+        return value
 
     def _validate_key(self, key: str, value) -> None:
         validator = _VALIDATORS.get(key)

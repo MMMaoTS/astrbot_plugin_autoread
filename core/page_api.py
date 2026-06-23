@@ -76,26 +76,48 @@ def _query_int(key: str, default: int = 1, min_val: int = 1, max_val: int = 100)
 
 
 async def _json_body():
-    """读取 JSON 请求体。"""
+    """读取 JSON 请求体。
+
+    依赖 quart.request（由 call_request_view → bind_quart_request_context 提供）。
+    如果 quart.request 上下文不可用，返回空 dict；handler 层会检测并返回明确错误。
+    """
     req = _get_quart_request()
     if req is None:
+        logger.warning("[AutoRead WebUI] quart.request 不可用（quart 未安装），无法读取请求体")
         return {}
-    if hasattr(req, "get_json"):
-        data = await req.get_json(silent=True)
-        return data if isinstance(data, dict) else {}
+    try:
+        if hasattr(req, "get_json"):
+            data = await req.get_json(silent=True)
+            return data if isinstance(data, dict) else {}
+    except RuntimeError as exc:
+        logger.warning(
+            f"[AutoRead WebUI] quart.request 上下文不可用（{exc}），"
+            "请确认 Dashboard 已启用 app_adapter 模式"
+        )
+    except Exception as exc:
+        logger.error(f"[AutoRead WebUI] 读取请求体失败: {exc}")
     return {}
 
 
 async def _upload_files():
-    """读取上传文件 multipart form。"""
+    """读取上传文件 multipart form。
+
+    依赖 quart.request（由 call_request_view → bind_quart_request_context 提供）。
+    """
     req = _get_quart_request()
     if req is None:
         return {}
     try:
         files = await req.files
         return files
-    except Exception:
-        return {}
+    except RuntimeError as exc:
+        logger.warning(
+            f"[AutoRead WebUI] quart.request 上下文不可用（{exc}），"
+            "无法读取上传文件"
+        )
+    except Exception as exc:
+        logger.error(f"[AutoRead WebUI] 读取上传文件失败: {exc}")
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +130,20 @@ class AutoReadWebUIAPI:
     def __init__(self, context, webui_service: WebUIService):
         self.context = context
         self.webui = webui_service
+
+    # ------------------------------------------------------------------
+    # 响应格式（与 AstrBot Plugin Page bridge 约定一致）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ok(data):
+        """成功响应：bridge 通过 response.data?.data 解包后返回 data 给前端。"""
+        return {"status": "ok", "success": True, "data": data}
+
+    @staticmethod
+    def _err(message: str):
+        """错误响应：bridge 检测 status==="error" 后抛出异常，前端 catch 显示。"""
+        return {"status": "error", "message": message}
 
     def register_routes(self):
         if not hasattr(self.context, "register_web_api"):
@@ -207,10 +243,10 @@ class AutoReadWebUIAPI:
 
     async def _overview(self):
         try:
-            return await self.webui.get_overview()
+            return self._ok(await self.webui.get_overview())
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] overview error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     # ==================================================================
     # Books
@@ -221,47 +257,43 @@ class AutoReadWebUIAPI:
             q = _query_str("query")
             page = _query_int("page", 1, 1, 10000)
             ps = _query_int("page_size", 20, 1, 100)
-            return await self.webui.list_books(query=q, page=page, page_size=ps)
+            return self._ok(await self.webui.list_books(query=q, page=page, page_size=ps))
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] list_books error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _get_book_detail(self, book_id: str):
         if not WebUIService.validate_book_id(book_id):
-            return {"status": "error", "message": "无效的 book_id", "data": None}
+            return self._err("无效的 book_id")
         try:
             data = await self.webui.get_book_detail(book_id)
             if data is None:
-                return {"status": "error", "message": "book not found", "data": None}
-            return data
+                return self._err("book not found")
+            return self._ok(data)
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] book_detail error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _upload_book(self):
         try:
             files = await _upload_files()
             upload = files.get("file") if files else None
             if upload is None:
-                return {
-                    "status": "error",
-                    "message": "缺少上传文件 (字段名: file)",
-                    "data": None,
-                }
+                return self._err("缺少上传文件 (字段名: file)")
             wrapped = _AsyncUploadFile(upload)
             result = await self.webui.upload_book_file(wrapped)
             import_result = await self.webui.import_uploaded_book(
                 stored_filename=result["stored_filename"]
             )
             result.update(import_result)
-            return result
+            return self._ok(result)
         except ValueError as exc:
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
         except PermissionError as exc:
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] upload error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     # ==================================================================
     # Sessions
@@ -269,10 +301,10 @@ class AutoReadWebUIAPI:
 
     async def _list_sessions(self):
         try:
-            return await self.webui.list_sessions()
+            return self._ok(await self.webui.list_sessions())
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] sessions error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     # ==================================================================
     # Notes
@@ -284,28 +316,28 @@ class AutoReadWebUIAPI:
             page = _query_int("page", 1, 1, 10000)
             ps = _query_int("page_size", 20, 1, 100)
             kw = _query_str("keyword", "", 100)
-            return await self.webui.get_notes(
+            return self._ok(await self.webui.get_notes(
                 book_id=book_id, page=page, page_size=ps, keyword=kw
-            )
+            ))
         except ValueError as exc:
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] notes error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _get_note_detail(self, book_id: str, note_id: str):
         if not WebUIService.validate_book_id(book_id):
-            return {"status": "error", "message": "无效的 book_id", "data": None}
+            return self._err("无效的 book_id")
         if not WebUIService.validate_note_id(note_id):
-            return {"status": "error", "message": "无效的 note_id", "data": None}
+            return self._err("无效的 note_id")
         try:
             data = await self.webui.get_note_detail(book_id, note_id)
             if data is None:
-                return {"status": "error", "message": "note not found", "data": None}
-            return data
+                return self._err("note not found")
+            return self._ok(data)
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] note_detail error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     # ==================================================================
     # Settings
@@ -314,41 +346,33 @@ class AutoReadWebUIAPI:
     async def _get_settings(self):
         """返回 self.config 真实配置（分组结构）。"""
         try:
-            return await self.webui.get_settings()
+            return self._ok(await self.webui.get_settings())
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] get_settings error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _update_settings(self):
         """更新 self.config 并调用 save_config()。"""
         try:
             body = await _json_body()
             if not body or "settings" not in body:
-                return {
-                    "status": "error",
-                    "message": "请求体缺少 settings 字段",
-                    "data": None,
-                }
+                return self._err("请求体缺少 settings 字段")
             patch = body["settings"]
             if not isinstance(patch, dict):
-                return {
-                    "status": "error",
-                    "message": "settings 必须是 JSON 对象",
-                    "data": None,
-                }
-            return await self.webui.update_settings(patch)
+                return self._err("settings 必须是 JSON 对象")
+            return self._ok(await self.webui.update_settings(patch))
         except ValueError as exc:
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] update_settings error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _list_providers(self):
         try:
-            return await self.webui.list_providers()
+            return self._ok(await self.webui.list_providers())
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] providers error: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     # ==================================================================
     # Backup
@@ -358,72 +382,64 @@ class AutoReadWebUIAPI:
         try:
             path = await self.webui.export_books_backup()
             if path is None:
-                return {"status": "error", "message": "导出失败", "data": None}
+                return self._err("导出失败")
             return FileResponse(str(path), filename=Path(path).name)
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] backup export books: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _backup_export_notes(self):
         try:
             path = await self.webui.export_notes_backup()
             if path is None:
-                return {"status": "error", "message": "导出失败", "data": None}
+                return self._err("导出失败")
             return FileResponse(str(path), filename=Path(path).name)
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] backup export notes: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _backup_export_full(self):
         try:
             path = await self.webui.export_full_backup()
             if path is None:
-                return {"status": "error", "message": "导出失败", "data": None}
+                return self._err("导出失败")
             return FileResponse(str(path), filename=Path(path).name)
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] backup export full: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _backup_import_preview(self):
         try:
             files = await _upload_files()
             upload = files.get("file") if files else None
             if upload is None:
-                return {
-                    "status": "error",
-                    "message": "缺少上传文件 (字段名: file)",
-                    "data": None,
-                }
+                return self._err("缺少上传文件 (字段名: file)")
             wrapped = _AsyncUploadFile(upload)
-            return await self.webui.parse_backup(wrapped)
+            return self._ok(await self.webui.parse_backup(wrapped))
         except ValueError as exc:
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] backup preview: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _backup_import_apply(self):
         try:
             files = await _upload_files()
             upload = files.get("file") if files else None
             if upload is None:
-                return {
-                    "status": "error",
-                    "message": "缺少上传文件 (字段名: file)",
-                    "data": None,
-                }
+                return self._err("缺少上传文件 (字段名: file)")
             wrapped = _AsyncUploadFile(upload)
-            return await self.webui.import_backup_merge(wrapped)
+            return self._ok(await self.webui.import_backup_merge(wrapped))
         except ValueError as exc:
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] backup import: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
 
     async def _backup_history(self):
         try:
             items = await self.webui.get_backup_history()
-            return {"items": items}
+            return self._ok({"items": items})
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] backup history: {exc}")
-            return {"status": "error", "message": str(exc), "data": None}
+            return self._err(str(exc))
