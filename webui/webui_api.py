@@ -11,7 +11,19 @@
 """
 
 from astrbot.api import logger
-from astrbot.api.web import request, json_response, error_response, file_response, PluginUploadFile
+
+# 兼容低版本 AstrBot: astrbot.api.web 可能不存在
+try:
+    from astrbot.api.web import request, json_response, error_response, file_response, PluginUploadFile
+    _HAS_WEB_API = True
+except ImportError:
+    logger.warning("[AutoRead WebUI] astrbot.api.web not available, WebUI API disabled")
+    request = None
+    json_response = None
+    error_response = None
+    file_response = None
+    PluginUploadFile = None
+    _HAS_WEB_API = False
 
 from .webui_service import WebUIService
 
@@ -26,6 +38,9 @@ class AutoReadWebUIAPI:
         self.webui = webui_service
 
     def register_routes(self):
+        if not _HAS_WEB_API:
+            logger.warning("[AutoRead WebUI] Web API module unavailable, skipping route registration")
+            return
         ctx = self.context
         p = PLUGIN_NAME
 
