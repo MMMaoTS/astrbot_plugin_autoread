@@ -1,284 +1,771 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AutoRead 管理</title>
-    <link rel="stylesheet" href="./style.css" />
-  </head>
-  <body>
-    <header class="app-header">
-      <h1>AutoRead 管理</h1>
-      <button id="btn-refresh" class="btn btn-secondary" title="刷新所有数据">刷新</button>
-    </header>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AutoRead 管理</title>
+<style>
+:root {
+  --bg: #ffffff;
+  --panel: #f7f7f8;
+  --text: #1f2328;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #f59e0b;
+  --card-bg: #ffffff;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+html[data-theme="dark"] {
+  --bg: #111827;
+  --panel: #1f2937;
+  --text: #f9fafb;
+  --muted: #9ca3af;
+  --border: #374151;
+  --primary: #60a5fa;
+  --primary-hover: #3b82f6;
+  --danger: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --card-bg: #1f2937;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px; color: var(--text); background: var(--bg); line-height: 1.5; padding: 16px;
+}
+.app-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.app-header h1 { font-size: 20px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel);
+  color: var(--text); font-size: 13px; cursor: pointer; transition: background 0.15s;
+}
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: var(--panel); color: var(--text); }
+.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn-small { padding: 3px 8px; font-size: 12px; }
+.btn-close { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--muted); line-height: 1; padding: 4px; }
+.btn-close:hover { color: var(--text); }
+section {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; margin-bottom: 16px;
+}
+section h2 { font-size: 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.messages { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; margin-bottom: 12px; }
+.messages.error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.messages.success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+html[data-theme="dark"] .messages.error { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
+html[data-theme="dark"] .messages.success { background: #052e16; color: #86efac; border-color: #166534; }
+.overview-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.card {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; text-align: center;
+}
+.card-value { display: block; font-size: 28px; font-weight: 700; }
+.card-label { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.card-error { border-color: var(--danger); }
+.card-error .card-value { color: var(--danger); font-size: 13px; word-break: break-all; }
+.upload-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.upload-row input[type="file"] { flex: 1; }
+.hint { font-size: 12px; color: var(--muted); }
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.toolbar input, .toolbar select {
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--card-bg); color: var(--text); font-size: 13px;
+}
+.toolbar input { flex: 1; min-width: 150px; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+td { color: var(--text); }
+td.wrap { white-space: normal; max-width: 220px; word-break: break-word; }
+tr:hover td { background: rgba(0,0,0,0.02); }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--warning); color: #000; font-weight: 600; }
+.pagination { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+.pagination button { padding: 3px 10px; }
+.detail-panel {
+  position: fixed; top: 0; right: 0; width: 460px; max-width: 90vw; height: 100vh;
+  overflow-y: auto; z-index: 100; background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -4px 0 20px rgba(0,0,0,0.1); padding: 20px;
+}
+.detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.detail-body dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; }
+.detail-body dt { font-weight: 600; color: var(--muted); font-size: 12px; }
+.detail-body dd { color: var(--text); word-break: break-word; }
+.detail-body .field-block { margin-bottom: 16px; }
+.detail-body .field-block h4 { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.detail-body .field-block p {
+  background: var(--card-bg); padding: 10px; border-radius: var(--radius);
+  border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; font-size: 13px;
+}
+.empty { text-align: center; color: var(--muted); padding: 24px; font-size: 13px; }
+.tab-nav { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 2px solid var(--border); }
+.tab-btn {
+  padding: 8px 18px; border: none; background: none; color: var(--muted);
+  font-size: 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.tab-content[hidden] { display: none; }
+.settings-form fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+.settings-form legend { font-weight: 700; font-size: 14px; padding: 0 8px; }
+.settings-form label { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.settings-form label:last-of-type { border-bottom: none; }
+.settings-form label span { min-width: 160px; font-size: 13px; color: var(--muted); flex-shrink: 0; }
+.settings-form input[type="text"], .settings-form input[type="number"], .settings-form select, .settings-form textarea {
+  flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--card-bg); color: var(--text); font-size: 13px; font-family: inherit;
+}
+.settings-form input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); }
+.settings-form textarea { min-height: 80px; resize: vertical; }
+.settings-actions { display: flex; gap: 8px; padding-top: 8px; }
+.setting-group { padding-left: 0; }
+.provider-list-section {
+  margin-top: 12px; padding: 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--card-bg);
+}
+.provider-list-section h4 { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.provider-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.provider-item {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: 12px; cursor: pointer; color: var(--text); background: var(--panel); transition: border-color 0.15s;
+}
+.provider-item:hover { border-color: var(--primary); }
+.provider-item.selected { border-color: var(--primary); background: rgba(37,99,235,0.08); }
+html[data-theme="dark"] .provider-item.selected { background: rgba(96,165,250,0.15); }
+@media (max-width: 768px) {
+  .detail-panel { width: 100vw; max-width: 100vw; }
+  .overview-cards { grid-template-columns: repeat(2, 1fr); }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .tab-nav { flex-wrap: wrap; }
+  .settings-form label { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .settings-form label span { min-width: auto; }
+}
+</style>
+</head>
+<body>
 
-    <nav class="tab-nav">
-      <button class="tab-btn active" data-tab="overview">总览</button>
-      <button class="tab-btn" data-tab="books">书籍</button>
-      <button class="tab-btn" data-tab="reading">阅读任务</button>
-      <button class="tab-btn" data-tab="notes">笔记</button>
-      <button class="tab-btn" data-tab="settings">设置</button>
-    </nav>
+<header class="app-header">
+  <h1>AutoRead 管理</h1>
+  <button id="btn-refresh" class="btn btn-secondary" title="刷新所有数据">刷新</button>
+</header>
 
-    <section id="messages" class="messages" hidden></section>
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="overview">总览</button>
+  <button class="tab-btn" data-tab="books">书籍</button>
+  <button class="tab-btn" data-tab="reading">阅读任务</button>
+  <button class="tab-btn" data-tab="notes">笔记</button>
+  <button class="tab-btn" data-tab="settings">设置</button>
+</nav>
 
-    <!-- ============ 总览 ============ -->
-    <div data-tab-panel="overview" class="tab-content">
-      <section id="overview-panel" class="overview">
-        <h2>总览</h2>
-        <div class="overview-cards">
-          <div class="card">
-            <span class="card-value" id="ov-books">-</span>
-            <span class="card-label">书籍</span>
-          </div>
-          <div class="card">
-            <span class="card-value" id="ov-notes">-</span>
-            <span class="card-label">笔记</span>
-          </div>
-          <div class="card">
-            <span class="card-value" id="ov-active">-</span>
-            <span class="card-label">活跃阅读</span>
-          </div>
-          <div class="card card-error" id="ov-error-card" hidden>
-            <span class="card-value" id="ov-error">-</span>
-            <span class="card-label">最后错误</span>
-          </div>
-        </div>
-      </section>
+<section id="messages" class="messages" hidden></section>
+
+<!-- ============ 总览 ============ -->
+<div data-tab-panel="overview" class="tab-content">
+  <section class="overview">
+    <h2>总览</h2>
+    <div class="overview-cards">
+      <div class="card"><span class="card-value" id="ov-books">-</span><span class="card-label">书籍</span></div>
+      <div class="card"><span class="card-value" id="ov-notes">-</span><span class="card-label">笔记</span></div>
+      <div class="card"><span class="card-value" id="ov-active">-</span><span class="card-label">活跃阅读</span></div>
+      <div class="card card-error" id="ov-error-card" hidden><span class="card-value" id="ov-error">-</span><span class="card-label">最后错误</span></div>
     </div>
+  </section>
+</div>
 
-    <!-- ============ 书籍 ============ -->
-    <div data-tab-panel="books" class="tab-content" hidden>
-      <section id="upload" class="upload">
-        <h2>上传书籍</h2>
-        <div class="upload-row">
-          <input type="file" id="upload-input" accept=".txt,.md" />
-          <button id="btn-upload" class="btn btn-primary">上传并导入</button>
-        </div>
-        <p class="hint">仅支持 .txt / .md 文件，最大 10 MB。上传后自动导入并切片。</p>
-      </section>
-
-      <section id="books-list" class="books">
-        <h2>书籍管理</h2>
-        <div class="toolbar">
-          <input type="text" id="books-search" placeholder="搜索书名或 book_id..." />
-          <button id="btn-books-search" class="btn btn-secondary">搜索</button>
-        </div>
-        <div class="table-wrap">
-          <table id="books-table">
-            <thead>
-              <tr>
-                <th>书名</th>
-                <th>book_id</th>
-                <th>字符数</th>
-                <th>切片数</th>
-                <th>笔记数</th>
-                <th>活跃</th>
-                <th>进度</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="books-tbody"></tbody>
-          </table>
-        </div>
-        <div class="pagination" id="books-pagination"></div>
-      </section>
+<!-- ============ 书籍 ============ -->
+<div data-tab-panel="books" class="tab-content" hidden>
+  <section class="upload">
+    <h2>上传书籍</h2>
+    <div class="upload-row">
+      <input type="file" id="upload-input" accept=".txt,.md" />
+      <button id="btn-upload" class="btn btn-primary">上传并导入</button>
     </div>
-
-    <!-- ============ 阅读任务 ============ -->
-    <div data-tab-panel="reading" class="tab-content" hidden>
-      <section id="sessions" class="sessions">
-        <h2>当前阅读任务</h2>
-        <div class="table-wrap">
-          <table id="sessions-table">
-            <thead>
-              <tr>
-                <th>会话</th>
-                <th>书名</th>
-                <th>进度</th>
-                <th>状态</th>
-                <th>上次阅读</th>
-                <th>下次阅读</th>
-              </tr>
-            </thead>
-            <tbody id="sessions-tbody"></tbody>
-          </table>
-        </div>
-      </section>
+    <p class="hint">仅支持 .txt / .md 文件，最大 10 MB。上传后自动导入并切片。</p>
+  </section>
+  <section class="books">
+    <h2>书籍管理</h2>
+    <div class="toolbar">
+      <input type="text" id="books-search" placeholder="搜索书名或 book_id..." />
+      <button id="btn-books-search" class="btn btn-secondary">搜索</button>
     </div>
-
-    <!-- ============ 笔记 ============ -->
-    <div data-tab-panel="notes" class="tab-content" hidden>
-      <section id="notes-panel" class="notes">
-        <h2>阅读笔记 <span class="badge">只读</span></h2>
-        <div class="toolbar">
-          <select id="notes-book-filter">
-            <option value="">全部书籍</option>
-          </select>
-          <input type="text" id="notes-keyword" placeholder="关键词搜索..." />
-          <button id="btn-notes-search" class="btn btn-secondary">搜索</button>
-        </div>
-        <div class="table-wrap">
-          <table id="notes-table">
-            <thead>
-              <tr>
-                <th>时间</th>
-                <th>书名</th>
-                <th>章节</th>
-                <th>段</th>
-                <th>类型</th>
-                <th>模型</th>
-                <th>重要性</th>
-                <th>摘要</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="notes-tbody"></tbody>
-          </table>
-        </div>
-        <div class="pagination" id="notes-pagination"></div>
-      </section>
+    <div class="table-wrap">
+      <table><thead><tr>
+        <th>书名</th><th>book_id</th><th>字符数</th><th>切片数</th><th>笔记数</th><th>活跃</th><th>进度</th><th>创建时间</th><th>操作</th>
+      </tr></thead><tbody id="books-tbody"></tbody></table>
     </div>
+    <div class="pagination" id="books-pagination"></div>
+  </section>
+</div>
 
-    <!-- ============ 设置 ============ -->
-    <div data-tab-panel="settings" class="tab-content" hidden>
-      <section id="settings-panel" class="settings-panel">
-        <h2>插件设置</h2>
-        <form id="settings-form" class="settings-form">
-          <fieldset>
-            <legend>基础设置</legend>
-            <label><span>启用插件</span><input type="checkbox" name="enabled" /></label>
-            <label><span>默认阅读间隔（分钟）</span><input type="number" name="default_interval_minutes" min="1" max="10080" /></label>
-            <label><span>Worker 扫描间隔（秒）</span><input type="number" name="worker_tick_seconds" min="10" max="3600" /></label>
-            <label><span>主动分享模式</span><select name="auto_share_mode">
-              <option value="none">不分享</option>
-              <option value="daily">每日</option>
-              <option value="chapter">按章节</option>
-              <option value="every_step">每段</option>
-              <option value="finish">读完</option>
-            </select></label>
-          </fieldset>
+<!-- ============ 阅读任务 ============ -->
+<div data-tab-panel="reading" class="tab-content" hidden>
+  <section class="sessions">
+    <h2>当前阅读任务</h2>
+    <div class="table-wrap">
+      <table><thead><tr>
+        <th>会话</th><th>书名</th><th>进度</th><th>状态</th><th>上次阅读</th><th>下次阅读</th>
+      </tr></thead><tbody id="sessions-tbody"></tbody></table>
+    </div>
+  </section>
+</div>
 
-          <fieldset>
-            <legend>阅读设置</legend>
-            <label><span>每次阅读字符数</span><input type="number" name="chunk_size" min="100" max="50000" /></label>
-            <label><span>切片重叠字符数</span><input type="number" name="chunk_overlap" min="0" max="5000" /></label>
-            <label><span>角色可见阅读提示词</span><textarea name="reading_persona_prompt" rows="4" maxlength="4000"></textarea></label>
-          </fieldset>
+<!-- ============ 笔记 ============ -->
+<div data-tab-panel="notes" class="tab-content" hidden>
+  <section class="notes">
+    <h2>阅读笔记 <span class="badge">只读</span></h2>
+    <div class="toolbar">
+      <select id="notes-book-filter"><option value="">全部书籍</option></select>
+      <input type="text" id="notes-keyword" placeholder="关键词搜索..." />
+      <button id="btn-notes-search" class="btn btn-secondary">搜索</button>
+    </div>
+    <div class="table-wrap">
+      <table><thead><tr>
+        <th>时间</th><th>书名</th><th>章节</th><th>段</th><th>类型</th><th>模型</th><th>重要性</th><th>摘要</th><th>操作</th>
+      </tr></thead><tbody id="notes-tbody"></tbody></table>
+    </div>
+    <div class="pagination" id="notes-pagination"></div>
+  </section>
+</div>
 
-          <fieldset>
-            <legend>阅读模型分工设置</legend>
-            <label><span>模型策略</span><select name="reading_model_strategy" id="setting-model-strategy">
-              <option value="two_stage">双模型分工</option>
-              <option value="fixed_single">单模型</option>
-              <option value="current_session">当前会话</option>
-            </select></label>
-
-            <div id="setting-two-stage-group" class="setting-group">
-              <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">低成本模型 (cheap) — 高频 chunk 阅读</h4>
-              <label><span>Provider ID</span><input type="text" name="cheap_provider_id" maxlength="200" id="setting-cheap-provider-id" /></label>
-              <label><span>显示名称</span><input type="text" name="cheap_provider_display_name" maxlength="120" /></label>
-
-              <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">高质量模型 (quality) — 章节总结、重要分享、全书总结</h4>
-              <label><span>Provider ID</span><input type="text" name="quality_provider_id" maxlength="200" id="setting-quality-provider-id" /></label>
-              <label><span>显示名称</span><input type="text" name="quality_provider_display_name" maxlength="120" /></label>
-
-              <div class="provider-list-section">
-                <h4>可用模型列表</h4>
-                <button type="button" id="btn-refresh-providers" class="btn btn-small btn-secondary">刷新模型列表</button>
-                <div id="provider-list" class="provider-list"></div>
-                <p class="hint" id="provider-hint" hidden>当前运行环境未提供可用模型列表接口，请手动填写 provider_id。</p>
-              </div>
-            </div>
-
-            <div id="setting-single-group" class="setting-group" hidden>
-              <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">单模型配置</h4>
-              <label><span>Provider ID</span><input type="text" name="single_provider_id" maxlength="200" /></label>
-              <label><span>显示名称</span><input type="text" name="single_provider_display_name" maxlength="120" /></label>
-            </div>
-
-            <h4 style="margin:8px 0;font-size:13px;color:var(--muted)">各阶段模型角色分配</h4>
-            <label><span>chunk 阅读使用</span><select name="chunk_note_model_role">
-              <option value="cheap">低成本</option>
-              <option value="quality">高质量</option>
-              <option value="current_session">当前会话</option>
-            </select></label>
-            <label><span>章节总结使用</span><select name="chapter_note_model_role">
-              <option value="cheap">低成本</option>
-              <option value="quality">高质量</option>
-              <option value="current_session">当前会话</option>
-            </select></label>
-            <label><span>重要总结使用</span><select name="important_note_model_role">
-              <option value="quality">高质量</option>
-              <option value="cheap">低成本</option>
-              <option value="current_session">当前会话</option>
-            </select></label>
-            <label><span>全书总结使用</span><select name="final_review_model_role">
-              <option value="quality">高质量</option>
-              <option value="cheap">低成本</option>
-              <option value="current_session">当前会话</option>
-            </select></label>
-            <label><span>记忆沉淀使用</span><select name="memory_note_model_role">
-              <option value="quality">高质量</option>
-              <option value="cheap">低成本</option>
-              <option value="current_session">当前会话</option>
-            </select></label>
-            <label><span>重要性升级阈值</span><input type="number" name="pro_upgrade_importance_threshold" min="0" max="1" step="0.05" /></label>
-            <label><span>启用深入复核</span><input type="checkbox" name="enable_deeper_review" /></label>
-            <label><span>每章最多复核次数</span><input type="number" name="max_deeper_reviews_per_chapter" min="0" max="100" /></label>
-            <label><span>不可用时回退到当前会话</span><input type="checkbox" name="fallback_to_current_session_provider" /></label>
-          </fieldset>
-
-          <!-- 旧模型配置 (兼容，隐藏) -->
-          <input type="hidden" name="reading_model_mode" value="current_session" />
-          <input type="hidden" name="reading_provider_id" value="" />
-          <input type="hidden" name="reading_provider_display_name" value="" />
-
-          <fieldset>
-            <legend>WebUI 设置</legend>
-            <label><span>允许 WebUI 上传</span><input type="checkbox" name="webui_upload_enabled" /></label>
-            <label><span>上传大小限制（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
-            <label><span>允许删除/归档</span><input type="checkbox" name="webui_allow_book_delete" /></label>
-            <label><span>允许导出笔记</span><input type="checkbox" name="webui_notes_export_enabled" /></label>
-          </fieldset>
-
-          <fieldset>
-            <legend>扩展设置</legend>
-            <label><span>允许 URL 导入</span><input type="checkbox" name="allow_url_import" /></label>
-            <label><span>记忆后端</span><select name="memory_backend">
-              <option value="none">无</option>
-              <option value="angel_memory">天使之魂</option>
-              <option value="livingmemory">LivingMemory</option>
-            </select></label>
-          </fieldset>
-
-          <div class="settings-actions">
-            <button type="submit" id="btn-save-settings" class="btn btn-primary">保存设置</button>
-            <button type="button" id="btn-reload-settings" class="btn btn-secondary">重新加载</button>
+<!-- ============ 设置 ============ -->
+<div data-tab-panel="settings" class="tab-content" hidden>
+  <section class="settings-panel">
+    <h2>插件设置</h2>
+    <form id="settings-form" class="settings-form">
+      <fieldset><legend>基础设置</legend>
+        <label><span>启用插件</span><input type="checkbox" name="enabled" /></label>
+        <label><span>默认阅读间隔（分钟）</span><input type="number" name="default_interval_minutes" min="1" max="10080" /></label>
+        <label><span>Worker 扫描间隔（秒）</span><input type="number" name="worker_tick_seconds" min="10" max="3600" /></label>
+        <label><span>主动分享模式</span><select name="auto_share_mode">
+          <option value="none">不分享</option><option value="daily">每日</option>
+          <option value="chapter">按章节</option><option value="every_step">每段</option><option value="finish">读完</option>
+        </select></label>
+      </fieldset>
+      <fieldset><legend>阅读设置</legend>
+        <label><span>每次阅读字符数</span><input type="number" name="chunk_size" min="100" max="50000" /></label>
+        <label><span>切片重叠字符数</span><input type="number" name="chunk_overlap" min="0" max="5000" /></label>
+        <label><span>角色可见阅读提示词</span><textarea name="reading_persona_prompt" rows="4" maxlength="4000"></textarea></label>
+      </fieldset>
+      <fieldset><legend>阅读模型分工设置</legend>
+        <label><span>模型策略</span><select name="reading_model_strategy" id="setting-model-strategy">
+          <option value="two_stage">双模型分工</option><option value="fixed_single">单模型</option><option value="current_session">当前会话</option>
+        </select></label>
+        <div id="setting-two-stage-group" class="setting-group">
+          <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">低成本模型 (cheap) — 高频 chunk 阅读</h4>
+          <label><span>Provider ID</span><input type="text" name="cheap_provider_id" maxlength="200" id="setting-cheap-provider-id" /></label>
+          <label><span>显示名称</span><input type="text" name="cheap_provider_display_name" maxlength="120" /></label>
+          <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">高质量模型 (quality) — 章节总结、重要分享、全书总结</h4>
+          <label><span>Provider ID</span><input type="text" name="quality_provider_id" maxlength="200" id="setting-quality-provider-id" /></label>
+          <label><span>显示名称</span><input type="text" name="quality_provider_display_name" maxlength="120" /></label>
+          <div class="provider-list-section">
+            <h4>可用模型列表</h4>
+            <button type="button" id="btn-refresh-providers" class="btn btn-small btn-secondary">刷新模型列表</button>
+            <div id="provider-list" class="provider-list"></div>
+            <p class="hint" id="provider-hint" hidden>当前运行环境未提供可用模型列表接口，请手动填写 provider_id。</p>
           </div>
-        </form>
-      </section>
-    </div>
-
-    <!-- 书籍详情面板 -->
-    <section id="book-detail-panel" class="detail-panel" hidden>
-      <div class="detail-header">
-        <h2>书籍详情</h2>
-        <button class="btn-close" id="btn-close-book-detail">&times;</button>
+        </div>
+        <div id="setting-single-group" class="setting-group" hidden>
+          <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">单模型配置</h4>
+          <label><span>Provider ID</span><input type="text" name="single_provider_id" maxlength="200" /></label>
+          <label><span>显示名称</span><input type="text" name="single_provider_display_name" maxlength="120" /></label>
+        </div>
+        <h4 style="margin:8px 0;font-size:13px;color:var(--muted)">各阶段模型角色分配</h4>
+        <label><span>chunk 阅读使用</span><select name="chunk_note_model_role">
+          <option value="cheap">低成本</option><option value="quality">高质量</option><option value="current_session">当前会话</option>
+        </select></label>
+        <label><span>章节总结使用</span><select name="chapter_note_model_role">
+          <option value="cheap">低成本</option><option value="quality">高质量</option><option value="current_session">当前会话</option>
+        </select></label>
+        <label><span>重要总结使用</span><select name="important_note_model_role">
+          <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
+        </select></label>
+        <label><span>全书总结使用</span><select name="final_review_model_role">
+          <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
+        </select></label>
+        <label><span>记忆沉淀使用</span><select name="memory_note_model_role">
+          <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
+        </select></label>
+        <label><span>重要性升级阈值</span><input type="number" name="pro_upgrade_importance_threshold" min="0" max="1" step="0.05" /></label>
+        <label><span>启用深入复核</span><input type="checkbox" name="enable_deeper_review" /></label>
+        <label><span>每章最多复核次数</span><input type="number" name="max_deeper_reviews_per_chapter" min="0" max="100" /></label>
+        <label><span>不可用时回退到当前会话</span><input type="checkbox" name="fallback_to_current_session_provider" /></label>
+      </fieldset>
+      <input type="hidden" name="reading_model_mode" value="current_session" />
+      <input type="hidden" name="reading_provider_id" value="" />
+      <input type="hidden" name="reading_provider_display_name" value="" />
+      <fieldset><legend>WebUI 设置</legend>
+        <label><span>允许 WebUI 上传</span><input type="checkbox" name="webui_upload_enabled" /></label>
+        <label><span>上传大小限制（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
+        <label><span>允许删除/归档</span><input type="checkbox" name="webui_allow_book_delete" /></label>
+        <label><span>允许导出笔记</span><input type="checkbox" name="webui_notes_export_enabled" /></label>
+      </fieldset>
+      <fieldset><legend>扩展设置</legend>
+        <label><span>允许 URL 导入</span><input type="checkbox" name="allow_url_import" /></label>
+        <label><span>记忆后端</span><select name="memory_backend">
+          <option value="none">无</option><option value="angel_memory">天使之魂</option><option value="livingmemory">LivingMemory</option>
+        </select></label>
+      </fieldset>
+      <div class="settings-actions">
+        <button type="submit" id="btn-save-settings" class="btn btn-primary">保存设置</button>
+        <button type="button" id="btn-reload-settings" class="btn btn-secondary">重新加载</button>
       </div>
-      <div class="detail-body" id="book-detail-body"></div>
-    </section>
+    </form>
+  </section>
+</div>
 
-    <!-- 笔记详情面板 -->
-    <section id="note-detail-panel" class="detail-panel" hidden>
-      <div class="detail-header">
-        <h2>笔记详情 <span class="badge">只读</span></h2>
-        <button class="btn-close" id="btn-close-note-detail">&times;</button>
-      </div>
-      <div class="detail-body" id="note-detail-body"></div>
-    </section>
+<!-- 书籍详情面板 -->
+<section id="book-detail-panel" class="detail-panel" hidden>
+  <div class="detail-header"><h2>书籍详情</h2><button class="btn-close" id="btn-close-book-detail">&times;</button></div>
+  <div class="detail-body" id="book-detail-body"></div>
+</section>
 
-    <script type="module" src="./app.js"></script>
-  </body>
+<!-- 笔记详情面板 -->
+<section id="note-detail-panel" class="detail-panel" hidden>
+  <div class="detail-header"><h2>笔记详情 <span class="badge">只读</span></h2><button class="btn-close" id="btn-close-note-detail">&times;</button></div>
+  <div class="detail-body" id="note-detail-body"></div>
+</section>
+
+<script>
+(function() {
+"use strict";
+var bridge = window.AstrBotPluginPage;
+
+// ======================================================================
+// API
+// ======================================================================
+function apiGet(endpoint, params) {
+  params = params || {};
+  return bridge.apiGet(endpoint, params).catch(function(err) {
+    console.error("[AutoRead] apiGet " + endpoint + ":", err);
+    throw err;
+  });
+}
+function apiPost(endpoint, body) {
+  body = body || {};
+  return bridge.apiPost(endpoint, body).catch(function(err) {
+    console.error("[AutoRead] apiPost " + endpoint + ":", err);
+    throw err;
+  });
+}
+function uploadFile(endpoint, file) {
+  return bridge.upload(endpoint, file).catch(function(err) {
+    console.error("[AutoRead] upload " + endpoint + ":", err);
+    throw err;
+  });
+}
+
+// ======================================================================
+// UI helpers
+// ======================================================================
+function showMessage(text, type) {
+  type = type || "success";
+  var el = document.getElementById("messages");
+  el.hidden = false;
+  el.className = "messages " + type;
+  el.textContent = text;
+  setTimeout(function() { el.hidden = true; }, 5000);
+}
+function showError(text) { showMessage(text, "error"); }
+function escapeHtml(str) {
+  if (!str) return "";
+  var div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+function truncate(str, max) {
+  if (!str) return "";
+  max = max || 80;
+  return str.length > max ? str.slice(0, max) + "…" : str;
+}
+function formatTime(iso) {
+  if (!iso) return "-";
+  try {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  } catch(e) { return iso; }
+}
+
+// ======================================================================
+// Tab switching
+// ======================================================================
+function showTab(tabName) {
+  document.querySelectorAll(".tab-btn").forEach(function(btn) {
+    btn.classList.toggle("active", btn.dataset.tab === tabName);
+  });
+  document.querySelectorAll("[data-tab-panel]").forEach(function(panel) {
+    panel.hidden = panel.dataset.tabPanel !== tabName;
+  });
+  if (tabName === "settings") { loadSettings(); loadProviders(); }
+}
+
+// ======================================================================
+// Panel open/close
+// ======================================================================
+var _currentPanel = null;
+function openPanel(panelId, renderFn) {
+  closePanel();
+  var panel = document.getElementById(panelId);
+  panel.hidden = false;
+  renderFn();
+  _currentPanel = panelId;
+}
+function closePanel() {
+  if (_currentPanel) {
+    document.getElementById(_currentPanel).hidden = true;
+    _currentPanel = null;
+  }
+}
+
+// ======================================================================
+// Overview
+// ======================================================================
+function loadOverview() {
+  return apiGet("overview").then(function(data) {
+    document.getElementById("ov-books").textContent = data.books_count;
+    document.getElementById("ov-notes").textContent = data.notes_count;
+    document.getElementById("ov-active").textContent = data.active_sessions_count;
+    var errCard = document.getElementById("ov-error-card");
+    if (data.last_error) {
+      errCard.hidden = false;
+      document.getElementById("ov-error").textContent = truncate(data.last_error, 120);
+    } else { errCard.hidden = true; }
+  }).catch(function(err) { showError("加载总览失败: " + err.message); });
+}
+
+// ======================================================================
+// Books
+// ======================================================================
+var _booksPage = 1;
+function loadBooks(page) {
+  _booksPage = page || 1;
+  var query = document.getElementById("books-search").value.trim();
+  return apiGet("books", { query: query, page: _booksPage, page_size: 20 }).then(function(data) {
+    renderBooksTable(data.items);
+    renderBooksPagination(data);
+    updateNotesBookFilter(data.items);
+  }).catch(function(err) { showError("加载书籍列表失败: " + err.message); });
+}
+function renderBooksTable(items) {
+  var tbody = document.getElementById("books-tbody");
+  if (!items.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无书籍。请上传 txt/md 文件导入。</td></tr>'; return; }
+  tbody.innerHTML = items.map(function(b) {
+    return '<tr><td>' + escapeHtml(b.title) + '</td><td><code>' + escapeHtml(b.book_id) + '</code></td>' +
+      '<td>' + b.total_chars.toLocaleString() + '</td><td>' + b.total_chunks + '</td><td>' + b.notes_count + '</td>' +
+      '<td>' + (b.is_active ? "是" : "-") + '</td><td>' + b.progress.percent + '% (' + b.progress.max_current_chunk_index + '/' + b.progress.total_chunks + ')</td>' +
+      '<td>' + formatTime(b.created_at) + '</td><td><button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button></td></tr>';
+  }).join("");
+}
+function renderBooksPagination(data) {
+  document.getElementById("books-pagination").innerHTML =
+    '共 ' + data.total + ' 条，第 ' + data.page + ' / ' + (Math.ceil(data.total / data.page_size) || 1) + ' 页 ' +
+    '<button class="btn btn-small" ' + (data.page <= 1 ? "disabled" : "") + ' data-action="books-prev">上一页</button> ' +
+    '<button class="btn btn-small" ' + (data.page * data.page_size >= data.total ? "disabled" : "") + ' data-action="books-next">下一页</button>';
+}
+function loadBookDetail(bookId) {
+  return apiGet("books/" + bookId).then(function(data) {
+    openPanel("book-detail-panel", function() { renderBookDetail(data); });
+  }).catch(function(err) { showError("加载书籍详情失败: " + err.message); });
+}
+function renderBookDetail(data) {
+  var body = document.getElementById("book-detail-body");
+  var sessionsHtml = data.active_sessions.length
+    ? data.active_sessions.map(function(s) {
+        return '<div style="margin-bottom:6px;padding:8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">' +
+          '会话: <code>' + escapeHtml(s.session_id) + '</code><br>进度: ' + s.current_chunk_index + '/' + s.total_chunks +
+          ' | 状态: ' + (s.paused ? "已暂停" : "阅读中") + '<br>上次: ' + formatTime(s.last_read_at) + ' | 下次: ' + formatTime(s.next_read_at) + '</div>';
+      }).join("")
+    : '<p style="color:var(--muted);font-size:13px">暂无活跃会话</p>';
+  body.innerHTML = '<dl><dt>书名</dt><dd>' + escapeHtml(data.title) + '</dd>' +
+    '<dt>book_id</dt><dd><code>' + escapeHtml(data.book_id) + '</code></dd>' +
+    '<dt>来源</dt><dd>' + escapeHtml(data.source_type) + '</dd>' +
+    '<dt>总字符数</dt><dd>' + data.total_chars.toLocaleString() + '</dd>' +
+    '<dt>切片数</dt><dd>' + data.total_chunks + '</dd>' +
+    '<dt>笔记数</dt><dd>' + data.notes_count + '</dd>' +
+    '<dt>创建时间</dt><dd>' + formatTime(data.created_at) + '</dd></dl>' +
+    '<div class="field-block" style="margin-top:12px"><h4>存储路径</h4><p>' + escapeHtml(data.source_path) + '</p></div>' +
+    '<div class="field-block"><h4>活跃会话</h4>' + sessionsHtml + '</div>';
+}
+
+// ======================================================================
+// Upload
+// ======================================================================
+function uploadBook() {
+  var input = document.getElementById("upload-input");
+  var file = input.files[0];
+  if (!file) { showError("请先选择一个文件"); return; }
+  var ext = "." + file.name.split(".").pop().toLowerCase();
+  if (ext !== ".txt" && ext !== ".md") { showError("仅支持 .txt 和 .md 文件"); return; }
+  var btn = document.getElementById("btn-upload");
+  btn.disabled = true; btn.textContent = "上传中...";
+  uploadFile("books/upload", file).then(function(result) {
+    showMessage("已导入《" + result.title + "》，" + result.total_chunks + " 段，共 " + result.total_chars.toLocaleString() + " 字符");
+    input.value = "";
+    return Promise.all([loadOverview(), loadBooks()]);
+  }).catch(function(err) { showError("上传失败: " + (err.message || "未知错误")); })
+  .finally(function() { btn.disabled = false; btn.textContent = "上传并导入"; });
+}
+
+// ======================================================================
+// Sessions
+// ======================================================================
+function loadSessions() {
+  return apiGet("sessions").then(function(data) {
+    renderSessionsTable(data.items);
+  }).catch(function(err) { showError("加载会话列表失败: " + err.message); });
+}
+function renderSessionsTable(items) {
+  var tbody = document.getElementById("sessions-tbody");
+  if (!items.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无活跃阅读任务。请通过聊天 /read start 或自然对话开始阅读。</td></tr>'; return; }
+  tbody.innerHTML = items.map(function(s) {
+    return '<tr><td><code>' + escapeHtml(s.session_id) + '</code></td><td>' + escapeHtml(s.title) + '</td>' +
+      '<td>' + s.current_chunk_index + '/' + s.total_chunks + '</td>' +
+      '<td>' + (s.paused ? "⏸ 已暂停" : "📖 阅读中") + '</td>' +
+      '<td>' + formatTime(s.last_read_at) + '</td><td>' + formatTime(s.next_read_at) + '</td></tr>';
+  }).join("");
+}
+
+// ======================================================================
+// Notes (read-only)
+// ======================================================================
+var _notesPage = 1;
+function loadNotes(page) {
+  _notesPage = page || 1;
+  var bookId = document.getElementById("notes-book-filter").value;
+  var keyword = document.getElementById("notes-keyword").value.trim();
+  return apiGet("notes", { book_id: bookId, keyword: keyword, page: _notesPage, page_size: 20 }).then(function(data) {
+    renderNotesTable(data.items);
+    renderNotesPagination(data);
+  }).catch(function(err) { showError("加载笔记失败: " + err.message); });
+}
+function renderNotesTable(items) {
+  var tbody = document.getElementById("notes-tbody");
+  if (!items.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无阅读笔记。</td></tr>'; return; }
+  tbody.innerHTML = items.map(function(n) {
+    return '<tr><td>' + formatTime(n.created_at) + '</td><td>' + escapeHtml(n.book_title) + '</td>' +
+      '<td>' + escapeHtml(n.chapter_title || n.chapter || "") + '</td><td>' + (n.chunk_index || 0) + '</td>' +
+      '<td><span class="badge" style="font-size:10px">' + escapeHtml(n.record_type || "chunk_note") + '</span></td>' +
+      '<td>' + escapeHtml(n.model_role || n.provider_display_name || "-") + '</td>' +
+      '<td>' + (n.importance_score || 0).toFixed(2) + (n.needs_deeper_review ? " *" : "") + '</td>' +
+      '<td class="wrap">' + escapeHtml(truncate(n.summary || "", 50)) + '</td>' +
+      '<td><button class="btn btn-small btn-secondary" data-action="note-detail" data-book-id="' + escapeHtml(n.book_id) + '" data-note-id="' + escapeHtml(n.note_id || n.record_id || "") + '">查看</button></td></tr>';
+  }).join("");
+}
+function renderNotesPagination(data) {
+  document.getElementById("notes-pagination").innerHTML =
+    '共 ' + data.total + ' 条，第 ' + data.page + ' / ' + (Math.ceil(data.total / data.page_size) || 1) + ' 页 ' +
+    '<button class="btn btn-small" ' + (data.page <= 1 ? "disabled" : "") + ' data-action="notes-prev">上一页</button> ' +
+    '<button class="btn btn-small" ' + (data.page * data.page_size >= data.total ? "disabled" : "") + ' data-action="notes-next">下一页</button>';
+}
+function loadNoteDetail(bookId, noteId) {
+  return apiGet("notes/" + bookId + "/" + noteId).then(function(data) {
+    openPanel("note-detail-panel", function() { renderNoteDetail(data); });
+  }).catch(function(err) { showError("加载笔记详情失败: " + err.message); });
+}
+function renderNoteDetail(data) {
+  var body = document.getElementById("note-detail-body");
+  var mu = data.model_usage || {};
+  body.innerHTML = '<dl><dt>record_id</dt><dd><code>' + escapeHtml(data.record_id || data.note_id) + '</code></dd>' +
+    '<dt>类型</dt><dd>' + escapeHtml(data.record_type || "chunk_note") + '</dd>' +
+    '<dt>书名</dt><dd>' + escapeHtml(data.book_title) + '</dd>' +
+    '<dt>段索引</dt><dd>' + (data.chunk_index || 0) + ' / ' + (data.chunk_total || "?") + '</dd>' +
+    '<dt>章节</dt><dd>' + escapeHtml(data.chapter_title || data.chapter || "") + '</dd>' +
+    '<dt>重要性</dt><dd>' + (data.importance_score || 0).toFixed(2) + (data.needs_deeper_review ? " (需复核)" : "") + '</dd>' +
+    '<dt>模型角色</dt><dd>' + escapeHtml(mu.model_role || data.model_role || "-") + '</dd>' +
+    '<dt>Provider</dt><dd>' + escapeHtml(mu.provider_display_name || data.provider_display_name || "-") + '</dd>' +
+    '<dt>创建时间</dt><dd>' + formatTime(data.created_at) + '</dd>' +
+    '<dt>标签</dt><dd>' + ((data.tags || []).join(", ") || "-") + '</dd></dl>' +
+    '<div class="field-block"><h4>摘要</h4><p>' + escapeHtml(data.summary) + '</p></div>' +
+    '<div class="field-block"><h4>细节</h4><p>' + escapeHtml(data.detail || "（未记录）") + '</p></div>' +
+    '<div class="field-block"><h4>感想</h4><p>' + escapeHtml(data.reflection || "（未记录）") + '</p></div>' +
+    '<div class="field-block"><h4>长期记忆</h4><p>' + escapeHtml(data.memory_note || "（未记录）") + '</p></div>' +
+    '<div class="field-block"><h4>分享文案</h4><p>' + escapeHtml(data.share_message || "（未设置）") + '</p></div>' +
+    '<div class="field-block"><h4>待解问题</h4><p>' + ((data.open_questions || []).map(function(q) { return escapeHtml(q); }).join("<br>") || "（无）") + '</p></div>';
+}
+function updateNotesBookFilter(bookItems) {
+  var select = document.getElementById("notes-book-filter");
+  var current = select.value;
+  var existing = {};
+  Array.from(select.options).forEach(function(o) { existing[o.value] = true; });
+  (bookItems || []).forEach(function(b) {
+    if (!existing[b.book_id]) {
+      var opt = document.createElement("option");
+      opt.value = b.book_id; opt.textContent = b.title; select.appendChild(opt);
+    }
+  });
+  if (current) select.value = current;
+}
+
+// ======================================================================
+// Settings
+// ======================================================================
+function loadSettings() {
+  return apiGet("settings").then(function(data) {
+    renderSettings(data.settings);
+  }).catch(function(err) { showError("加载设置失败: " + err.message); });
+}
+function renderSettings(settings) {
+  var form = document.getElementById("settings-form");
+  Object.keys(settings).forEach(function(key) {
+    var el = form.querySelector('[name="' + key + '"]');
+    if (!el) return;
+    if (el.type === "checkbox") { el.checked = !!settings[key]; }
+    else { el.value = settings[key] != null ? settings[key] : ""; }
+  });
+  updateModelStrategyUI(settings.reading_model_strategy || "two_stage");
+}
+function updateModelStrategyUI(strategy) {
+  var two = document.getElementById("setting-two-stage-group");
+  var single = document.getElementById("setting-single-group");
+  if (two) two.hidden = strategy !== "two_stage";
+  if (single) single.hidden = strategy !== "fixed_single";
+}
+function saveSettings() {
+  var form = document.getElementById("settings-form");
+  var fd = new FormData(form);
+  var patch = {};
+  fd.forEach(function(value, key) {
+    var el = form.querySelector('[name="' + key + '"]');
+    if (el && el.type === "checkbox") { patch[key] = el.checked; }
+    else if (el && el.type === "number") { if (value !== "") patch[key] = Number(value); }
+    else { patch[key] = value; }
+  });
+  var btn = document.getElementById("btn-save-settings");
+  btn.disabled = true; btn.textContent = "保存中...";
+  return apiPost("settings", { settings: patch }).then(function(result) {
+    showMessage(result.message || "设置已保存");
+  }).catch(function(err) { showError("保存设置失败: " + (err.message || "未知错误")); })
+  .finally(function() { btn.disabled = false; btn.textContent = "保存设置"; });
+}
+
+// ======================================================================
+// Providers
+// ======================================================================
+function loadProviders() {
+  return apiGet("providers").then(function(data) {
+    renderProviderOptions(data);
+  }).catch(function(err) {
+    console.error("[AutoRead] loadProviders error:", err);
+    document.getElementById("provider-list").innerHTML = '<p class="hint">无法获取模型列表: ' + escapeHtml(err.message) + '</p>';
+  });
+}
+function renderProviderOptions(data) {
+  var list = document.getElementById("provider-list");
+  var hint = document.getElementById("provider-hint");
+  if (!data.items || !data.items.length) {
+    list.innerHTML = ""; hint.hidden = false;
+    if (data.message) hint.textContent = data.message;
+    return;
+  }
+  hint.hidden = true;
+  list.innerHTML = data.items.map(function(p) {
+    return '<button type="button" class="provider-item" data-provider-id="' + escapeHtml(p.provider_id) +
+      '" data-provider-name="' + escapeHtml(p.display_name) + '" title="' + escapeHtml(p.type || "chat") + '">' + escapeHtml(p.display_name) + '</button>';
+  }).join("");
+  list.querySelectorAll(".provider-item").forEach(function(item) {
+    item.addEventListener("click", function() {
+      var pid = item.dataset.providerId;
+      var name = item.dataset.providerName;
+      var cheapEl = document.getElementById("setting-cheap-provider-id");
+      var qualityEl = document.getElementById("setting-quality-provider-id");
+      if (cheapEl && !cheapEl.value) cheapEl.value = pid;
+      if (qualityEl && !qualityEl.value) qualityEl.value = pid;
+      var dnCheap = document.querySelector('[name="cheap_provider_display_name"]');
+      var dnQuality = document.querySelector('[name="quality_provider_display_name"]');
+      if (dnCheap) dnCheap.value = name;
+      if (dnQuality) dnQuality.value = name;
+      list.querySelectorAll(".provider-item").forEach(function(el) { el.classList.remove("selected"); });
+      item.classList.add("selected");
+    });
+  });
+}
+
+// ======================================================================
+// Refresh all
+// ======================================================================
+function refreshAll() {
+  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes()]).then(function() {
+    return apiGet("books", { page: 1, page_size: 100 }).then(function(data) {
+      updateNotesBookFilter(data.items);
+    }).catch(function() {});
+  });
+}
+
+// ======================================================================
+// Event delegation
+// ======================================================================
+document.addEventListener("click", function(e) {
+  var target = e.target.closest("[data-action]");
+  if (!target) return;
+  var action = target.dataset.action;
+  switch (action) {
+    case "book-detail": loadBookDetail(target.dataset.bookId); break;
+    case "note-detail": loadNoteDetail(target.dataset.bookId, target.dataset.noteId); break;
+    case "books-prev": loadBooks(_booksPage - 1); break;
+    case "books-next": loadBooks(_booksPage + 1); break;
+    case "notes-prev": loadNotes(_notesPage - 1); break;
+    case "notes-next": loadNotes(_notesPage + 1); break;
+  }
+});
+
+// ======================================================================
+// Button events
+// ======================================================================
+document.getElementById("btn-refresh").addEventListener("click", refreshAll);
+document.getElementById("btn-upload").addEventListener("click", uploadBook);
+document.getElementById("btn-books-search").addEventListener("click", function() { loadBooks(1); });
+document.getElementById("btn-notes-search").addEventListener("click", function() { loadNotes(1); });
+document.getElementById("btn-close-book-detail").addEventListener("click", closePanel);
+document.getElementById("btn-close-note-detail").addEventListener("click", closePanel);
+document.getElementById("books-search").addEventListener("keydown", function(e) { if (e.key === "Enter") loadBooks(1); });
+document.getElementById("notes-keyword").addEventListener("keydown", function(e) { if (e.key === "Enter") loadNotes(1); });
+document.getElementById("notes-book-filter").addEventListener("change", function() { loadNotes(1); });
+
+document.querySelectorAll(".tab-btn").forEach(function(btn) {
+  btn.addEventListener("click", function() { showTab(btn.dataset.tab); });
+});
+
+document.getElementById("setting-model-strategy").addEventListener("change", function(e) {
+  updateModelStrategyUI(e.target.value);
+});
+document.getElementById("btn-refresh-providers").addEventListener("click", loadProviders);
+document.getElementById("settings-form").addEventListener("submit", function(e) {
+  e.preventDefault(); saveSettings();
+});
+document.getElementById("btn-reload-settings").addEventListener("click", loadSettings);
+
+document.addEventListener("click", function(e) {
+  if (_currentPanel) {
+    var panel = document.getElementById(_currentPanel);
+    if (panel && !panel.contains(e.target) && e.target !== panel) {
+      if (!e.target.closest("[data-action]")) { closePanel(); }
+    }
+  }
+});
+document.addEventListener("keydown", function(e) { if (e.key === "Escape") closePanel(); });
+
+// ======================================================================
+// Startup
+// ======================================================================
+bridge.ready().then(function() {
+  return refreshAll();
+}).catch(function(err) {
+  console.error("[AutoRead] Startup failed:", err);
+});
+
+})();
+</script>
+</body>
 </html>
