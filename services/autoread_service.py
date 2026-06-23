@@ -692,3 +692,174 @@ class AutoReadService:
             await self.state_store.set_last_error(umo, err_msg)
             logger.warning(f"[AutoRead] Share failed: {exc}")
             return f"(主动分享失败: {err_msg}。笔记已保存，可通过 /read notes 查看。)"
+
+    # ------------------------------------------------------------------
+    # 重新阅读（不推进主进度）
+    # ------------------------------------------------------------------
+
+    async def reread_range(
+        self,
+        umo: str,
+        book_id: str,
+        start_index: int | None = None,
+        end_index: int | None = None,
+        start_percent: float | None = None,
+        end_percent: float | None = None,
+        note_id: str | None = None,
+        source: str = "command",
+    ) -> str:
+        """重新阅读指定范围。不推进主进度，不删除旧笔记。"""
+        if disabled := self._enabled_message():
+            return disabled
+
+        book = await self.state_store.get_book(book_id)
+        if book is None:
+            return f"书籍 {book_id} 不存在。"
+
+        total_chunks = book.get("total_chunks", 0)
+        if total_chunks == 0:
+            return f"《{book['title']}》尚未切片，无法重读。"
+
+        chunks_path = self.data_dir / "chunks" / f"{book_id}.chunks.json"
+        if not chunks_path.exists():
+            return f"切片文件丢失: {chunks_path}"
+
+        chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
+
+        # 确定范围
+        if note_id:
+            found = False
+            notes, _ = await self.state_store.get_all_notes(book_id=book_id, page=1, page_size=10000)
+            for raw in notes:
+                rid = raw.get("record_id") or raw.get("note_id", "")
+                if rid == note_id:
+                    idx = raw.get("chunk_index", -1)
+                    if idx >= 0 and idx < len(chunks):
+                        start_index = idx
+                        end_index = idx
+                        found = True
+                    break
+            if not found:
+                return (
+                    f"未找到笔记 {note_id}，或该笔记没有保存原文范围。\n"
+                    f"请改用 --book <book_id> --from <start> --to <end> 指定范围。"
+                )
+
+        if start_percent is not None:
+            start_index = int(start_percent / 100 * total_chunks)
+        if end_percent is not None:
+            end_index = int(end_percent / 100 * total_chunks)
+
+        if start_index is None:
+            return "请指定重读范围: --from <index> 或 --from <percent>%"
+
+        if end_index is None:
+            end_index = start_index
+
+        start_index = max(0, min(start_index, len(chunks) - 1))
+        end_index = max(start_index, min(end_index, len(chunks) - 1))
+
+        logger.info(
+            f"[AutoRead] reread: book={book_id} range=[{start_index},{end_index}] "
+            f"total={total_chunks} note={note_id or 'N/A'}"
+        )
+
+        results = []
+        for idx in range(start_index, end_index + 1):
+            chunk = chunks[idx]
+            try:
+                note = await self.note_writer.write_note(
+                    umo=umo,
+                    book_id=book_id,
+                    book_title=book["title"],
+                    chunk=chunk,
+                    chunk_index=idx,
+                    chunk_total=total_chunks,
+                )
+            except Exception as exc:
+                results.append(f"第 {idx + 1} 段笔记生成失败: {exc}")
+                continue
+
+            note["source_stage"] = "reread"
+            try:
+                await self.state_store.append_note(book_id, note)
+            except Exception as exc:
+                results.append(f"第 {idx + 1} 段笔记保存失败: {exc}")
+                continue
+
+            if source == "llm_tool":
+                results.append(
+                    _fmt_tool_context(book["title"], idx, total_chunks, chunk.get("chapter", "?"), note)
+                )
+            else:
+                results.append(
+                    _fmt_command_result(book["title"], idx, total_chunks, chunk.get("chapter", "?"), note)
+                )
+
+        if not results:
+            return "重新阅读未生成任何笔记。"
+
+        summary = (
+            f"[REREAD] 《{book['title']}》第 {start_index + 1}-{end_index + 1}/{total_chunks} 段\n"
+            f"主进度未改变。共生成 {len(results)} 条笔记。\n\n"
+        )
+        return summary + "\n\n".join(results)
+
+    # ------------------------------------------------------------------
+    # 设置阅读进度（不读取内容）
+    # ------------------------------------------------------------------
+
+    async def set_progress(
+        self,
+        umo: str,
+        book_id: str,
+        chunk_index: int | None = None,
+        percent: float | None = None,
+    ) -> str:
+        """设置主阅读进度。不读取内容，不创建笔记。"""
+        session = await self.state_store.get_session(umo)
+        if session is None:
+            return "当前会话尚未绑定。请先使用 /read bind 绑定。"
+
+        if session.get("current_book_id") and session["current_book_id"] != book_id:
+            return (
+                f"当前正在阅读《{session.get('current_book_title', '?')}》"
+                f"（{session['current_book_id']}）。\n"
+                f"请先 /read stop 停止当前阅读，再设置新书的进度。"
+            )
+
+        book = await self.state_store.get_book(book_id)
+        if book is None:
+            return f"书籍 {book_id} 不存在。"
+
+        total_chunks = book.get("total_chunks", 0)
+        if total_chunks == 0:
+            return f"《{book['title']}》尚未切片，无法设置进度。"
+
+        if percent is not None:
+            chunk_index = int(percent / 100 * total_chunks)
+
+        if chunk_index is None:
+            return "请指定目标进度: --percent <N>% 或 --index <N>"
+
+        chunk_index = max(0, min(chunk_index, total_chunks - 1))
+
+        if not session.get("current_book_id"):
+            session["current_book_id"] = book_id
+            session["current_book_title"] = book["title"]
+            session["total_chunks"] = total_chunks
+
+        session["current_chunk_index"] = chunk_index
+        await self.state_store.update_session(umo, {
+            "current_chunk_index": chunk_index,
+            "current_book_id": book_id,
+            "current_book_title": book["title"],
+            "total_chunks": total_chunks,
+        })
+
+        logger.info(f"[AutoRead] set_progress: book={book_id} chunk={chunk_index}/{total_chunks}")
+        return (
+            f"[PROGRESS] 《{book['title']}》进度已设为第 {chunk_index + 1}/{total_chunks} 段"
+            f"（{round(chunk_index / total_chunks * 100, 1)}%）。\n"
+            f"未读取内容，未生成笔记。下次继续阅读将从此处开始。"
+        )

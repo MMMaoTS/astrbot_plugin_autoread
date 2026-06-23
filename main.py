@@ -314,6 +314,152 @@ class AutoReadPlugin(Star):
         result = await self.autoread_service.stop(event.unified_msg_origin)
         yield event.plain_result(result)
 
+    @read.command("reread")
+    async def read_reread(self, event: AstrMessageEvent, args: str = ""):
+        """重新阅读指定范围。不推进主进度，不删除旧笔记。
+
+        用法:
+          /read reread --note <note_id>        按笔记 ID 重读对应段
+          /read reread --book <book_id> --from 35% --to 40%
+          /read reread --book <book_id> --from-index 10 --to-index 15
+          /read reread --help                  查看帮助
+        """
+        umo = event.unified_msg_origin
+        parsed = self._parse_reread_args(args)
+
+        if parsed.get("help"):
+            yield event.plain_result(
+                "/read reread 用法:\n"
+                "  --note <note_id>           按笔记 ID 重读对应原文段落\n"
+                "  --book <book_id>           指定书籍\n"
+                "  --from <N>%                起始百分比\n"
+                "  --to <N>%                  结束百分比\n"
+                "  --from-index <N>           起始段索引\n"
+                "  --to-index <N>             结束段索引\n"
+                "\n重读不推进主进度，不删除旧笔记。"
+            )
+            return
+
+        if not parsed.get("book_id") and not parsed.get("note_id"):
+            yield event.plain_result(
+                "请指定 --book <book_id> 或 --note <note_id>。\n"
+                "使用 /read reread --help 查看完整用法。"
+            )
+            return
+
+        result = await self.autoread_service.reread_range(
+            umo=umo,
+            book_id=parsed.get("book_id", ""),
+            note_id=parsed.get("note_id"),
+            start_index=parsed.get("start_index"),
+            end_index=parsed.get("end_index"),
+            start_percent=parsed.get("start_percent"),
+            end_percent=parsed.get("end_percent"),
+            source="command",
+        )
+        yield event.plain_result(result)
+
+    @read.command("progress")
+    async def read_progress(self, event: AstrMessageEvent, args: str = ""):
+        """查看或设置阅读进度。
+
+        用法:
+          /read progress                      查看当前进度
+          /read progress set --book <book_id> --percent 35%
+          /read progress set --book <book_id> --index 10
+        """
+        umo = event.unified_msg_origin
+        args = (args or "").strip()
+
+        if not args or args == "list":
+            result = await self.autoread_service.get_status(umo, source="command")
+            yield event.plain_result(result)
+            return
+
+        if args.startswith("set "):
+            parsed = self._parse_progress_args(args[4:])
+            if not parsed.get("book_id"):
+                yield event.plain_result("请指定 --book <book_id>")
+                return
+            if parsed.get("chunk_index") is None and parsed.get("percent") is None:
+                yield event.plain_result("请指定 --percent <N>% 或 --index <N>")
+                return
+            result = await self.autoread_service.set_progress(
+                umo=umo,
+                book_id=parsed["book_id"],
+                chunk_index=parsed.get("chunk_index"),
+                percent=parsed.get("percent"),
+            )
+            yield event.plain_result(result)
+            return
+
+        yield event.plain_result(
+            "用法: /read progress [set --book <id> --percent N% | --index N]\n"
+            "不带参数时查看当前进度。"
+        )
+
+    @staticmethod
+    def _parse_reread_args(args: str) -> dict:
+        import re
+        result: dict = {}
+        tokens = args.split()
+        i = 0
+        while i < len(tokens):
+            t = tokens[i]
+            if t == "--help":
+                result["help"] = True
+            elif t == "--book" and i + 1 < len(tokens):
+                i += 1; result["book_id"] = tokens[i].strip()
+            elif t == "--note" and i + 1 < len(tokens):
+                i += 1; result["note_id"] = tokens[i].strip()
+            elif t == "--from" and i + 1 < len(tokens):
+                i += 1; v = tokens[i].strip()
+                if v.endswith("%"):
+                    try: result["start_percent"] = float(v[:-1])
+                    except ValueError: pass
+                else:
+                    try: result["start_index"] = int(v)
+                    except ValueError: pass
+            elif t == "--to" and i + 1 < len(tokens):
+                i += 1; v = tokens[i].strip()
+                if v.endswith("%"):
+                    try: result["end_percent"] = float(v[:-1])
+                    except ValueError: pass
+                else:
+                    try: result["end_index"] = int(v)
+                    except ValueError: pass
+            elif t == "--from-index" and i + 1 < len(tokens):
+                i += 1
+                try: result["start_index"] = int(tokens[i])
+                except ValueError: pass
+            elif t == "--to-index" and i + 1 < len(tokens):
+                i += 1
+                try: result["end_index"] = int(tokens[i])
+                except ValueError: pass
+            i += 1
+        return result
+
+    @staticmethod
+    def _parse_progress_args(args: str) -> dict:
+        import re
+        result: dict = {}
+        tokens = args.split()
+        i = 0
+        while i < len(tokens):
+            t = tokens[i]
+            if t == "--book" and i + 1 < len(tokens):
+                i += 1; result["book_id"] = tokens[i].strip()
+            elif t == "--percent" and i + 1 < len(tokens):
+                i += 1; v = tokens[i].strip().rstrip("%")
+                try: result["percent"] = float(v)
+                except ValueError: pass
+            elif t == "--index" and i + 1 < len(tokens):
+                i += 1
+                try: result["chunk_index"] = int(tokens[i])
+                except ValueError: pass
+            i += 1
+        return result
+
     # ==================================================================
     # LLM Tool 入口 —— 自然对话触发
     # ==================================================================

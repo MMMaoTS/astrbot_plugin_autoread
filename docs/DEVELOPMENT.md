@@ -57,6 +57,8 @@ astrbot_plugin_autoread/
 7. LLM 调用失败不得推进进度
 8. 主动发送失败不得丢失笔记或回滚进度
 9. 自然语言工具不得暴露删除笔记/书籍能力
+10. reread 不得调用 read_next；reread 不推进主进度
+11. set_progress 不读取内容、不创建笔记
 
 ## WebUI API
 

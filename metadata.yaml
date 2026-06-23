@@ -6,7 +6,4 @@ author: MMMaoTS
 version: 0.1.0
 repo: ""
 astrbot_version: ">=4.16,<5"
-support_platforms:
-  - aiocqhttp
-  - satori
-  - qq_official
+support_platforms: “”

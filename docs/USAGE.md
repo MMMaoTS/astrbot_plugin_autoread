@@ -100,6 +100,27 @@ AstrBot/data/plugin_data/astrbot_plugin_autoread/books/
 /read stop     停止当前阅读（历史笔记保留）
 ```
 
+### /read reread
+
+重新阅读指定范围。不推进主进度，不删除旧笔记。
+
+```
+/read reread --note record_xxx             按笔记 ID 重读对应段
+/read reread --book book_xxx --from 35% --to 40%
+/read reread --book book_xxx --from-index 10 --to-index 15
+/read reread --help                        查看帮助
+```
+
+### /read progress
+
+查看或设置阅读进度。设置进度不读取内容，不生成笔记。
+
+```
+/read progress                             查看当前进度
+/read progress set --book book_xxx --percent 35%
+/read progress set --book book_xxx --index 10
+```
+
 ## 自然对话入口
 
 自然对话工具调用需要模型支持 Function Calling。

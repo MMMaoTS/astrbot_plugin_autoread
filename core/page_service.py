@@ -699,6 +699,8 @@ class WebUIService:
                 "note_manual_create": False,
                 "note_manual_edit": False,
                 "reread_by_natural_language": True,
+                "reread_by_command": True,
+                "set_progress": True,
             },
         }
 
