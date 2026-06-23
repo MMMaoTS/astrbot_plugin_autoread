@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AutoRead 管理</title>
+<script src="/api/plugin/page/bridge-sdk.js"></script>
 <style>
 :root {
   --bg: #ffffff;
@@ -144,6 +145,19 @@ tr:hover td { background: rgba(0,0,0,0.02); }
   .settings-form label { flex-direction: column; align-items: flex-start; gap: 4px; }
   .settings-form label span { min-width: auto; }
 }
+/* confirm modal */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center;
+}
+.modal-overlay.hidden { display: none; }
+.modal-card {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; max-width: 380px; width: 90%; box-shadow: 0 8px 30px rgba(0,0,0,0.18);
+}
+.modal-card h3 { margin-bottom: 12px; font-size: 16px; }
+.modal-card .modal-msg { margin-bottom: 20px; font-size: 14px; color: var(--text); line-height: 1.6; }
+.modal-card .modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -172,7 +186,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
       <div class="card"><span class="card-value" id="ov-books">-</span><span class="card-label">书籍</span></div>
       <div class="card"><span class="card-value" id="ov-notes">-</span><span class="card-label">笔记</span></div>
       <div class="card"><span class="card-value" id="ov-active">-</span><span class="card-label">活跃阅读</span></div>
-      <div class="card card-error" id="ov-error-card" hidden><span class="card-value" id="ov-error">-</span><span class="card-label">最后错误</span></div>
+      <div class="card card-error" id="ov-error-card" hidden><span class="card-value" id="ov-error">-</span><span class="card-label" id="ov-error-label">最后错误</span><button type="button" id="btn-clear-error" class="btn btn-small btn-danger" style="margin-top:6px" hidden>清除错误</button></div>
     </div>
   </section>
 </div>
@@ -208,8 +222,11 @@ tr:hover td { background: rgba(0,0,0,0.02); }
     <h2>当前阅读任务</h2>
     <div class="table-wrap">
       <table><thead><tr>
-        <th>会话</th><th>书名</th><th>进度</th><th>状态</th><th>上次阅读</th><th>下次阅读</th>
+        <th>会话</th><th>书名</th><th>进度</th><th>状态</th><th>上次阅读</th><th>下次阅读</th><th>操作</th>
       </tr></thead><tbody id="sessions-tbody"></tbody></table>
+    </div>
+    <div style="margin-top:12px">
+      <button id="btn-clear-finished" class="btn btn-secondary btn-small">清理已完成/已取消</button>
     </div>
   </section>
 </div>
@@ -314,7 +331,8 @@ tr:hover td { background: rgba(0,0,0,0.02); }
         <label><span>启用 WebUI 页面</span><input type="checkbox" name="webui_enabled" /></label>
         <label><span>允许上传书籍</span><input type="checkbox" name="webui_upload_enabled" /></label>
         <label><span>上传大小上限（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
-        <label><span>允许删除书籍（未实现）</span><input type="checkbox" name="webui_allow_book_delete" /></label>
+        <label><span>允许 WebUI 删除数据</span><input type="checkbox" name="webui_delete_enabled" /></label>
+        <label><span>错误显示时长（分钟）</span><input type="number" name="webui_last_error_ttl_minutes" min="1" max="10080" /></label>
         <label><span>允许导出笔记</span><input type="checkbox" name="webui_notes_export_enabled" /></label>
       </fieldset>
 
@@ -382,16 +400,88 @@ tr:hover td { background: rgba(0,0,0,0.02); }
   <div class="detail-body" id="note-detail-body"></div>
 </section>
 
+<!-- 自定义确认弹窗（iframe 内 window.confirm 不可用） -->
+<div id="confirm-overlay" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>确认操作</h3>
+    <div id="confirm-msg" class="modal-msg"></div>
+    <div class="modal-btns">
+      <button type="button" class="btn btn-secondary" data-action="confirm-cancel">取消</button>
+      <button type="button" class="btn btn-primary" data-action="confirm-ok">确认</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function() {
 "use strict";
+console.info("[autoread-ui] loaded");
 var bridge = window.AstrBotPluginPage;
+var _bridgeAvailable = (typeof bridge === "object" && bridge !== null);
+var _usingBridge = _bridgeAvailable;
 var _providersCache = [];
 var _uploadSettings = { allowedExtensions: [".txt", ".md"], maxUploadMb: 10 };
+var _deleteEnabled = false;
+
+if (!_bridgeAvailable) {
+    console.warn("[AutoRead] AstrBotPluginPage bridge not found, will use fetch fallback");
+}
 
 // ======================================================================
-// API (with 10s timeout to detect bridge disconnection)
+// API base — 优先 bridge，bridge 缺失时回退到同源 fetch
 // ======================================================================
+var API_BASE = "/api/plug/astrbot_plugin_autoread";
+var _pageUrlParams = new URLSearchParams(window.location.search);
+var _assetToken = _pageUrlParams.get("asset_token") || "";
+
+function _fetchAuthUrl(url) {
+    if (_assetToken) {
+        return url + (url.indexOf("?") === -1 ? "?" : "&") + "asset_token=" + encodeURIComponent(_assetToken);
+    }
+    return url;
+}
+
+function _fetchUnwrap(json) {
+    if (json && json.status === "error") {
+        throw new Error(json.message || "API 请求失败");
+    }
+    if (json && json.data !== undefined) {
+        return json.data;
+    }
+    return json;
+}
+
+function _fetchGet(endpoint, params) {
+    var url = API_BASE + "/" + endpoint.replace(/^\/+/, "");
+    if (params && Object.keys(params).length) {
+        var sp = new URLSearchParams();
+        Object.keys(params).forEach(function(k) {
+            if (params[k] !== undefined && params[k] !== null && params[k] !== "") {
+                sp.append(k, params[k]);
+            }
+        });
+        var qs = sp.toString();
+        if (qs) url += "?" + qs;
+    }
+    return fetch(_fetchAuthUrl(url), { credentials: "same-origin" }).then(function(r) {
+        if (!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+        return r.json();
+    }).then(_fetchUnwrap);
+}
+
+function _fetchPost(endpoint, body) {
+    var url = API_BASE + "/" + endpoint.replace(/^\/+/, "");
+    return fetch(_fetchAuthUrl(url), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {})
+    }).then(function(r) {
+        if (!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+        return r.json();
+    }).then(_fetchUnwrap);
+}
+
 function _withTimeout(promise, ms, label) {
   ms = ms || 10000;
   return Promise.race([
@@ -403,21 +493,42 @@ function _withTimeout(promise, ms, label) {
     })
   ]);
 }
+function _bridgeErr(endpoint) {
+  return Promise.reject(new Error("WebUI 后端接口不可用，请检查插件日志"));
+}
 function apiGet(endpoint, params) {
   params = params || {};
-  return _withTimeout(bridge.apiGet(endpoint, params), 10000, "GET " + endpoint).catch(function(err) {
-    console.error("[AutoRead] apiGet " + endpoint + ":", err);
+  var label = "GET " + endpoint;
+  if (_bridgeAvailable) {
+    return _withTimeout(bridge.apiGet(endpoint, params), 10000, label).catch(function(err) {
+      console.error("[AutoRead] apiGet " + endpoint + ":", err);
+      throw err;
+    });
+  }
+  return _withTimeout(_fetchGet(endpoint, params), 10000, label).catch(function(err) {
+    console.error("[AutoRead] fetchGet " + endpoint + ":", err);
     throw err;
   });
 }
 function apiPost(endpoint, body) {
   body = body || {};
-  return _withTimeout(bridge.apiPost(endpoint, body), 10000, "POST " + endpoint).catch(function(err) {
-    console.error("[AutoRead] apiPost " + endpoint + ":", err);
+  var label = "POST " + endpoint;
+  // body 详情由 _doPost 记录，此处仅跟踪 bridge/fetch 路径
+  if (_bridgeAvailable) {
+    return _withTimeout(bridge.apiPost(endpoint, body), 10000, label).catch(function(err) {
+      console.error("[AutoRead] apiPost " + endpoint + ":", err);
+      throw err;
+    });
+  }
+  return _withTimeout(_fetchPost(endpoint, body), 10000, label).catch(function(err) {
+    console.error("[AutoRead] fetchPost " + endpoint + ":", err);
     throw err;
   });
 }
 function uploadFile(endpoint, file) {
+  if (!_bridgeAvailable) {
+    return Promise.reject(new Error("文件上传需要 bridge SDK，当前不可用"));
+  }
   return _withTimeout(bridge.upload(endpoint, file), 60000, "UPLOAD " + endpoint).catch(function(err) {
     console.error("[AutoRead] upload " + endpoint + ":", err);
     throw err;
@@ -439,6 +550,28 @@ function showMessage(text, type) {
   }
 }
 function showError(text) { showMessage(text, "error"); }
+
+var _confirmResolve = null;
+function confirmAction(message) {
+  console.info("[autoread-ui] confirm open", message);
+  var overlay = document.getElementById("confirm-overlay");
+  var msgEl = document.getElementById("confirm-msg");
+  if (!overlay || !msgEl) {
+    console.error("[autoread-ui] confirm modal DOM missing");
+    return Promise.resolve(false);
+  }
+  msgEl.textContent = message;
+  overlay.classList.remove("hidden");
+  return new Promise(function(resolve) {
+    _confirmResolve = function(result) {
+      console.info("[autoread-ui] confirm resolved", result);
+      overlay.classList.add("hidden");
+      _confirmResolve = null;
+      resolve(result);
+    };
+  });
+}
+
 function escapeHtml(str) {
   if (!str) return "";
   var div = document.createElement("div");
@@ -499,10 +632,20 @@ function loadOverview() {
     document.getElementById("ov-notes").textContent = data.notes_count;
     document.getElementById("ov-active").textContent = data.active_sessions_count;
     var errCard = document.getElementById("ov-error-card");
+    var errLabel = document.getElementById("ov-error-label");
+    var clearBtn = document.getElementById("btn-clear-error");
     if (data.last_error) {
       errCard.hidden = false;
       document.getElementById("ov-error").textContent = truncate(data.last_error, 120);
-    } else { errCard.hidden = true; }
+      var labelText = "最后错误";
+      if (data.last_error_at) labelText += " (" + formatTime(data.last_error_at) + ")";
+      if (data.last_error_ttl_minutes) labelText += " [TTL " + data.last_error_ttl_minutes + "min]";
+      if (errLabel) errLabel.textContent = labelText;
+      if (clearBtn) clearBtn.hidden = false;
+    } else {
+      errCard.hidden = true;
+      if (clearBtn) clearBtn.hidden = true;
+    }
   }).catch(function(err) { showError("加载总览失败: " + err.message); });
 }
 
@@ -526,7 +669,12 @@ function renderBooksTable(items) {
     return '<tr><td>' + escapeHtml(b.title) + '</td><td><code>' + escapeHtml(b.book_id) + '</code></td>' +
       '<td>' + b.total_chars.toLocaleString() + '</td><td>' + b.total_chunks + '</td><td>' + b.notes_count + '</td>' +
       '<td>' + (b.is_active ? "是" : "-") + '</td><td>' + b.progress.percent + '% (' + b.progress.max_current_chunk_index + '/' + b.progress.total_chunks + ')</td>' +
-      '<td>' + formatTime(b.created_at) + '</td><td><button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button></td></tr>';
+      '<td>' + formatTime(b.created_at) + '</td><td>' +
+        '<button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button> ' +
+        (_deleteEnabled
+          ? '<button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-book-id="' + escapeHtml(b.book_id) + '" data-book-title="' + escapeHtml(b.title) + '">删除</button>'
+          : '<button type="button" class="btn btn-small btn-secondary" disabled title="删除功能未启用（请在设置中开启 webui_delete_enabled）">删除</button>') +
+      '</td></tr>';
   }).join("");
 }
 function renderBooksPagination(data) {
@@ -583,6 +731,7 @@ function loadUploadSettings() {
   return apiGet("settings").then(function(data) {
     var flat = flattenSettings(data.settings || {});
     updateUploadHint(flat);
+    _deleteEnabled = !!flat.webui_delete_enabled;
   }).catch(function(err) {
     console.error("[AutoRead] loadUploadSettings error:", err);
   });
@@ -616,12 +765,13 @@ function loadSessions() {
 }
 function renderSessionsTable(items) {
   var tbody = document.getElementById("sessions-tbody");
-  if (!items.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无活跃阅读任务。请通过聊天 /read start 或自然对话开始阅读。</td></tr>'; return; }
+  if (!items.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无活跃阅读任务。请通过聊天 /read start 或自然对话开始阅读。</td></tr>'; return; }
   tbody.innerHTML = items.map(function(s) {
     return '<tr><td><code>' + escapeHtml(s.session_id) + '</code></td><td>' + escapeHtml(s.title) + '</td>' +
       '<td>' + s.current_chunk_index + '/' + s.total_chunks + '</td>' +
       '<td>' + (s.paused ? "已暂停" : "阅读中") + '</td>' +
-      '<td>' + formatTime(s.last_read_at) + '</td><td>' + formatTime(s.next_read_at) + '</td></tr>';
+      '<td>' + formatTime(s.last_read_at) + '</td><td>' + formatTime(s.next_read_at) + '</td>' +
+      '<td><button type="button" class="btn btn-small btn-danger" data-action="task-cancel" data-session-id="' + escapeHtml(s.session_id) + '">取消</button></td></tr>';
   }).join("");
 }
 
@@ -648,7 +798,12 @@ function renderNotesTable(items) {
       '<td>' + escapeHtml(n.stage || n.provider_id || "-") + '</td>' +
       '<td>' + (n.importance_score || 0).toFixed(2) + (n.needs_deeper_review ? " *" : "") + '</td>' +
       '<td class="wrap">' + escapeHtml(truncate(n.summary || "", 50)) + '</td>' +
-      '<td><button class="btn btn-small btn-secondary" data-action="note-detail" data-book-id="' + escapeHtml(n.book_id) + '" data-note-id="' + escapeHtml(n.note_id || n.record_id || "") + '">查看</button></td></tr>';
+      '<td>' +
+        '<button class="btn btn-small btn-secondary" data-action="note-detail" data-book-id="' + escapeHtml(n.book_id) + '" data-note-id="' + escapeHtml(n.note_id || n.record_id || "") + '">查看</button>' +
+        (_deleteEnabled
+          ? ' <button type="button" class="btn btn-small btn-danger" data-action="note-delete" data-book-id="' + escapeHtml(n.book_id) + '" data-note-id="' + escapeHtml(n.note_id || n.record_id || "") + '">删除</button>'
+          : ' <button type="button" class="btn btn-small btn-secondary" disabled title="删除功能未启用（请在设置中开启 webui_delete_enabled）">删除</button>') +
+      '</td></tr>';
   }).join("");
 }
 function renderNotesPagination(data) {
@@ -768,6 +923,9 @@ function loadSettings() {
     enableSettingsForm(true);
     if (errPanel) errPanel.hidden = true;
     renderSettings(data.settings);
+    // 同步删除开关状态
+    var flat = flattenSettings(data.settings || {});
+    _deleteEnabled = !!flat.webui_delete_enabled;
   }).catch(function(err) {
     enableSettingsForm(false);
     if (errPanel) {
@@ -895,8 +1053,9 @@ function getGroupForKey(key) {
     importance_threshold: "Model_Settings",
     max_reviews_per_chapter: "Model_Settings",
     webui_enabled: "WebUI_Settings", webui_upload_enabled: "WebUI_Settings",
-    webui_max_upload_mb: "WebUI_Settings", webui_allow_book_delete: "WebUI_Settings",
-    webui_notes_export_enabled: "WebUI_Settings",
+    webui_max_upload_mb: "WebUI_Settings",
+    webui_delete_enabled: "WebUI_Settings", webui_allow_book_delete: "WebUI_Settings",
+    webui_last_error_ttl_minutes: "WebUI_Settings", webui_notes_export_enabled: "WebUI_Settings",
   };
   return map[key] || null;
 }
@@ -907,7 +1066,26 @@ function getGroupForKey(key) {
 
 function exportBackup(type) {
   var endpoint = "backup/export/" + type;
-  return bridge.download(endpoint, {}, "autoread_" + type + "_backup.zip").catch(function(err) {
+  var filename = "autoread_" + type + "_backup.zip";
+  if (_bridgeAvailable) {
+    return bridge.download(endpoint, {}, filename).catch(function(err) {
+      showError("导出失败: " + (err.message || "未知错误"));
+    });
+  }
+  // fetch 兜底下载
+  var url = API_BASE + "/" + endpoint.replace(/^\/+/, "");
+  return fetch(_fetchAuthUrl(url), { credentials: "same-origin" }).then(function(r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.blob();
+  }).then(function(blob) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function() { URL.revokeObjectURL(a.href); }, 0);
+  }).catch(function(err) {
     showError("导出失败: " + (err.message || "未知错误"));
   });
 }
@@ -1010,6 +1188,15 @@ document.addEventListener("click", function(e) {
   var target = e.target.closest("[data-action]");
   if (!target) return;
   var action = target.dataset.action;
+  console.info("[autoread-ui] action", action, target.dataset);
+  if (action === "confirm-ok") {
+    if (_confirmResolve) _confirmResolve(true);
+    return;
+  }
+  if (action === "confirm-cancel") {
+    if (_confirmResolve) _confirmResolve(false);
+    return;
+  }
   switch (action) {
     case "book-detail": loadBookDetail(target.dataset.bookId); break;
     case "note-detail": loadNoteDetail(target.dataset.bookId, target.dataset.noteId); break;
@@ -1017,12 +1204,65 @@ document.addEventListener("click", function(e) {
     case "books-next": loadBooks(_booksPage + 1); break;
     case "notes-prev": loadNotes(_notesPage - 1); break;
     case "notes-next": loadNotes(_notesPage + 1); break;
+    case "book-delete":
+      (function() {
+        var bookId = target.dataset.bookId;
+        var title = target.dataset.bookTitle || bookId;
+        console.info("[autoread-ui] book-delete start", {bookId: bookId});
+        if (!_deleteEnabled) {
+          showError("删除功能未启用（请在设置中开启 webui_delete_enabled）");
+          console.info("[autoread-ui] book-delete blocked by capability");
+          return;
+        }
+        confirmAction("确认删除《" + title + "》吗？此操作不可撤销。").then(function(ok) {
+          if (!ok) { console.info("[autoread-ui] book-delete cancelled by user"); return; }
+          console.info("[autoread-ui] book-delete confirmed", {bookId: bookId});
+          deleteBook(bookId);
+        });
+      })();
+      break;
+    case "note-delete":
+      (function() {
+        var bookId = target.dataset.bookId;
+        var noteId = target.dataset.noteId;
+        console.info("[autoread-ui] note-delete start", {bookId: bookId, noteId: noteId});
+        if (!_deleteEnabled) {
+          showError("删除功能未启用（请在设置中开启 webui_delete_enabled）");
+          console.info("[autoread-ui] note-delete blocked by capability");
+          return;
+        }
+        confirmAction("确认删除这条阅读笔记吗？此操作不可撤销。").then(function(ok) {
+          if (!ok) { console.info("[autoread-ui] note-delete cancelled by user"); return; }
+          console.info("[autoread-ui] note-delete confirmed", {bookId: bookId, noteId: noteId});
+          deleteNote(bookId, noteId);
+        });
+      })();
+      break;
+    case "task-cancel":
+      (function() {
+        var sessionId = target.dataset.sessionId;
+        console.info("[autoread-ui] task-cancel start", {sessionId: sessionId});
+        confirmAction("确认取消这个阅读任务吗？").then(function(ok) {
+          if (!ok) { console.info("[autoread-ui] task-cancel cancelled by user"); return; }
+          console.info("[autoread-ui] task-cancel confirmed", {sessionId: sessionId});
+          cancelTask(sessionId);
+        });
+      })();
+      break;
+    default:
+      console.warn("[autoread-ui] unhandled action", action, target.dataset);
   }
 });
 
 // ======================================================================
 // Button events
 // ======================================================================
+// confirm modal 遮罩点击关闭
+var confirmOverlay = document.getElementById("confirm-overlay");
+if (confirmOverlay) confirmOverlay.addEventListener("click", function(e) {
+  if (e.target === confirmOverlay && _confirmResolve) _confirmResolve(false);
+});
+
 document.getElementById("btn-refresh").addEventListener("click", refreshAll);
 document.getElementById("btn-upload").addEventListener("click", uploadBook);
 document.getElementById("btn-books-search").addEventListener("click", function() { loadBooks(1); });
@@ -1056,6 +1296,26 @@ document.getElementById("btn-export-full").addEventListener("click", function() 
 document.getElementById("btn-backup-parse").addEventListener("click", parseBackup);
 document.getElementById("btn-backup-import").addEventListener("click", importBackup);
 
+// 删除 / 任务管理 / 错误清除按钮
+var btnClearError = document.getElementById("btn-clear-error");
+if (btnClearError) btnClearError.addEventListener("click", function() {
+  console.info("[autoread-ui] action error-clear");
+  confirmAction("确认清除所有最后错误记录吗？").then(function(ok) {
+    if (!ok) { console.info("[autoread-ui] error-clear cancelled by user"); return; }
+    console.info("[autoread-ui] error-clear confirmed");
+    clearError();
+  });
+});
+var btnClearFinished = document.getElementById("btn-clear-finished");
+if (btnClearFinished) btnClearFinished.addEventListener("click", function() {
+  console.info("[autoread-ui] action clear-finished");
+  confirmAction("确认清理所有已完成/已取消的历史任务记录吗？").then(function(ok) {
+    if (!ok) { console.info("[autoread-ui] clear-finished cancelled by user"); return; }
+    console.info("[autoread-ui] clear-finished confirmed");
+    clearFinishedTasks();
+  });
+});
+
 document.addEventListener("click", function(e) {
   if (_currentPanel) {
     var panel = document.getElementById(_currentPanel);
@@ -1064,16 +1324,128 @@ document.addEventListener("click", function(e) {
     }
   }
 });
-document.addEventListener("keydown", function(e) { if (e.key === "Escape") closePanel(); });
+document.addEventListener("keydown", function(e) {
+  if (e.key === "Escape") {
+    if (_confirmResolve) { _confirmResolve(false); return; }
+    closePanel();
+  }
+});
 
 // ======================================================================
-// Startup
+// Startup — bridge 可用则优先 bridge，不可用则 fetch 兜底
 // ======================================================================
-bridge.ready().then(function() {
-  return refreshAll();
-}).catch(function(err) {
-  console.error("[AutoRead] Startup failed:", err);
-});
+function loadCapabilities() {
+  return apiGet("status", {}).then(function(data) {
+    if (data && data.capabilities) {
+      _deleteEnabled = !!data.capabilities.delete_notes;
+    }
+  }).catch(function(err) {
+    console.warn("[autoread-ui] capabilities load failed, using settings fallback:", err.message);
+  });
+}
+
+function init() {
+  var ready;
+  if (_bridgeAvailable) {
+    console.log("[AutoRead] Initializing via AstrBotPluginPage bridge");
+    ready = bridge.ready().then(function(ctx) {
+      console.log("[AutoRead] Bridge ready, locale=" + (ctx && ctx.locale));
+    });
+  } else {
+    console.log("[AutoRead] Initializing via fetch fallback (bridge unavailable)");
+    ready = Promise.resolve();
+  }
+
+  ready.then(function() {
+    return loadCapabilities();
+  }).then(function() {
+    return refreshAll();
+  }).catch(function(err) {
+    console.error("[AutoRead] Init failed:", err);
+    showAllTabErrors("WebUI 后端接口不可用，请检查插件日志。错误: " + (err.message || "未知错误"));
+  });
+}
+
+// ======================================================================
+// 删除操作
+// ======================================================================
+function _doPost(endpoint, body, okMsg, refreshFn) {
+  console.info("[autoread-ui] request POST", endpoint, body);
+  if (_bridgeAvailable) {
+    return bridge.apiPost(endpoint, body).then(function(result) {
+      console.info("[autoread-ui] response", result);
+      showMessage((result && result.message) || okMsg);
+      if (refreshFn) refreshFn();
+    }).catch(function(err) {
+      console.error("[autoread-ui] request failed", err);
+      throw err;
+    });
+  }
+  var url = API_BASE + "/" + endpoint.replace(/^\/+/, "");
+  return fetch(_fetchAuthUrl(url), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {})
+  }).then(function(r) {
+    if (!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+    return r.json();
+  }).then(_fetchUnwrap).then(function(result) {
+    console.info("[autoread-ui] response", result);
+    showMessage((result && result.message) || okMsg);
+    if (refreshFn) refreshFn();
+  }).catch(function(err) {
+    console.error("[autoread-ui] request failed", err);
+    throw err;
+  });
+}
+
+function deleteBook(bookId) {
+  _doPost("books/delete", {book_id: bookId}, "已删除", function() { loadOverview(); loadBooks(); })
+    .catch(function(err) { showError("删除书籍失败: " + (err.message || "未知错误")); });
+}
+
+function deleteNote(bookId, recordId) {
+  _doPost("notes/delete", {book_id: bookId, record_id: recordId}, "已删除", function() { loadNotes(); loadOverview(); })
+    .catch(function(err) { showError("删除笔记失败: " + (err.message || "未知错误")); });
+}
+
+function cancelTask(sessionId) {
+  _doPost("sessions/cancel", {session_id: sessionId}, "已取消", function() { loadSessions(); loadOverview(); })
+    .catch(function(err) { showError("取消任务失败: " + (err.message || "未知错误")); });
+}
+
+function clearFinishedTasks() {
+  _doPost("sessions/clear-finished", {}, "已清理", function() { loadSessions(); })
+    .catch(function(err) { showError("清理任务失败: " + (err.message || "未知错误")); });
+}
+
+function clearError() {
+  _doPost("status/clear-error", {}, "已清除", function() { loadOverview(); })
+    .catch(function(err) { showError("清除错误失败: " + (err.message || "未知错误")); });
+}
+
+function showAllTabErrors(message) {
+  showError(message);
+  var booksTbody = document.getElementById("books-tbody");
+  if (booksTbody) booksTbody.innerHTML = '<tr><td colspan="9" class="empty">' + message + '</td></tr>';
+  var sessionsTbody = document.getElementById("sessions-tbody");
+  if (sessionsTbody) sessionsTbody.innerHTML = '<tr><td colspan="7" class="empty">' + message + '</td></tr>';
+  var notesTbody = document.getElementById("notes-tbody");
+  if (notesTbody) notesTbody.innerHTML = '<tr><td colspan="9" class="empty">' + message + '</td></tr>';
+  var settingsErr = document.getElementById("settings-error");
+  if (settingsErr) {
+    settingsErr.hidden = false;
+    settingsErr.textContent = message;
+  }
+  enableSettingsForm(false);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
 
 })();
 </script>

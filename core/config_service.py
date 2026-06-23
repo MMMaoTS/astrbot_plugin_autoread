@@ -30,7 +30,8 @@ _GROUP_KEYS = {
     }),
     "WebUI_Settings": frozenset({
         "webui_enabled", "webui_upload_enabled", "webui_max_upload_mb",
-        "webui_allow_book_delete", "webui_notes_export_enabled",
+        "webui_delete_enabled", "webui_allow_book_delete",
+        "webui_last_error_ttl_minutes", "webui_notes_export_enabled",
     }),
 }
 
@@ -52,12 +53,13 @@ _VALIDATORS = {
     "importance_threshold": lambda v: isinstance(v, (int, float)) and 0 <= v <= 1,
     "max_reviews_per_chapter": lambda v: isinstance(v, (int, float)) and 0 <= v <= 20,
     "reading_persona_prompt": lambda v: isinstance(v, str) and len(v) <= 4000,
+    "webui_last_error_ttl_minutes": lambda v: isinstance(v, (int, float)) and 1 <= v <= 10080,
 }
 
 _BOOL_KEYS = frozenset({
     "enabled", "enable_llm_tools", "allow_llm_read_next",
     "allow_url_import", "webui_enabled", "webui_upload_enabled",
-    "webui_allow_book_delete", "webui_notes_export_enabled",
+    "webui_delete_enabled", "webui_allow_book_delete", "webui_notes_export_enabled",
     "enable_stage_routing", "enable_deeper_review",
 })
 

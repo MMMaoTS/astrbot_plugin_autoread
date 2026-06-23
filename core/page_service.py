@@ -102,9 +102,21 @@ class WebUIService:
                 })
 
         last_error = None
+        last_error_at = None
+        ttl_minutes = int(self.config_service.get("webui_last_error_ttl_minutes", 30))
         for s in sessions.values():
             if s.get("last_error"):
+                err_at = s.get("last_error_at", "")
+                if err_at and ttl_minutes > 0:
+                    try:
+                        err_dt = datetime.fromisoformat(err_at)
+                        age = datetime.now(timezone(timedelta(hours=8))) - err_dt
+                        if age.total_seconds() > ttl_minutes * 60:
+                            continue  # 已过期，跳过
+                    except (ValueError, TypeError):
+                        pass
                 last_error = s["last_error"]
+                last_error_at = err_at or None
                 break
 
         return {
@@ -113,6 +125,8 @@ class WebUIService:
             "active_sessions_count": active_count,
             "current_books": current_books,
             "last_error": last_error,
+            "last_error_at": last_error_at,
+            "last_error_ttl_minutes": ttl_minutes,
         }
 
     # ------------------------------------------------------------------
@@ -548,3 +562,129 @@ class WebUIService:
         if self.backup_service is None:
             return []
         return await self.backup_service.get_history()
+
+    # ------------------------------------------------------------------
+    # 删除（受 webui_delete_enabled 开关控制）
+    # ------------------------------------------------------------------
+
+    def _check_delete_enabled(self):
+        if not self.config_service.get("webui_delete_enabled", False):
+            raise PermissionError("删除功能未开启。请在插件设置 → 页面设置中开启 webui_delete_enabled。")
+
+    async def delete_book(self, book_id: str) -> dict:
+        self._check_delete_enabled()
+        if not self.validate_book_id(book_id):
+            raise ValueError("无效的 book_id")
+
+        # 检查是否有关联笔记
+        notes_count = await self.state_store.count_notes_for_book(book_id)
+        if notes_count > 0:
+            raise ValueError(
+                f"该书仍有 {notes_count} 条关联笔记，请先逐条删除笔记后再删除书籍。"
+            )
+
+        deleted = await self.state_store.delete_book(book_id)
+        if deleted is None:
+            raise ValueError("book not found")
+
+        logger.info(
+            f"[AutoRead WebUI] Book deleted: {book_id} title={deleted.get('title', '?')}"
+        )
+        return {
+            "deleted": True,
+            "book_id": book_id,
+            "title": deleted.get("title", ""),
+            "message": f"已删除书籍: {deleted.get('title', book_id)}",
+        }
+
+    async def delete_note(self, book_id: str, record_id: str) -> dict:
+        self._check_delete_enabled()
+        if not self.validate_book_id(book_id):
+            raise ValueError("无效的 book_id")
+        if not self.validate_note_id(record_id):
+            raise ValueError("无效的 record_id")
+
+        deleted = await self.state_store.delete_note(book_id, record_id)
+        if deleted is None:
+            raise ValueError("note not found")
+
+        logger.info(
+            f"[AutoRead WebUI] Note deleted: book={book_id} record={record_id}"
+        )
+        return {
+            "deleted": True,
+            "book_id": book_id,
+            "record_id": record_id,
+            "message": "已删除笔记",
+        }
+
+    # ------------------------------------------------------------------
+    # 任务管理（无需开关）
+    # ------------------------------------------------------------------
+
+    async def cancel_task(self, masked_id: str) -> dict:
+        """通过 masked session id 取消阅读任务。"""
+        umo = await self.state_store.resolve_session_umo(masked_id)
+        if umo is None:
+            raise ValueError(f"无效的 session_id: {masked_id}")
+        session = await self.state_store.get_session(umo)
+        if session is None:
+            raise ValueError("session not found")
+        await self.state_store.stop_session(umo)
+        logger.info(f"[AutoRead WebUI] Task cancelled: {masked_id}")
+        return {
+            "cancelled": True,
+            "session_id": masked_id,
+            "message": "已取消阅读任务",
+        }
+
+    async def clear_finished_tasks(self) -> dict:
+        """清理所有已停止/已完成/无书籍的 session 记录。"""
+        sessions = await self.state_store.list_sessions()
+        cleared = 0
+        for umo, s in list(sessions.items()):
+            enabled = s.get("enabled", True)
+            has_book = bool(s.get("current_book_id"))
+            if not enabled or not has_book:
+                try:
+                    await self.state_store.clear_session(umo)
+                    cleared += 1
+                except Exception:
+                    pass
+        logger.info(f"[AutoRead WebUI] Cleared {cleared} finished tasks")
+        return {
+            "cleared": cleared,
+            "message": f"已清理 {cleared} 个历史任务记录",
+        }
+
+    # ------------------------------------------------------------------
+    # 错误管理
+    # ------------------------------------------------------------------
+
+    async def clear_error(self) -> dict:
+        count = await self.state_store.clear_all_last_errors()
+        logger.info(f"[AutoRead WebUI] Cleared {count} last_error(s)")
+        return {
+            "cleared": count,
+            "message": f"已清除 {count} 条最后错误记录",
+        }
+
+    # ------------------------------------------------------------------
+    # 状态查询（供前端初始化时读取 capabilities）
+    # ------------------------------------------------------------------
+
+    async def get_status(self) -> dict:
+        delete_enabled = self.config_service.get("webui_delete_enabled", False)
+        ttl = int(self.config_service.get("webui_last_error_ttl_minutes", 30))
+        return {
+            "capabilities": {
+                "delete_books": delete_enabled,
+                "delete_notes": delete_enabled,
+                "manage_tasks": True,
+                "clear_error": True,
+            },
+            "config": {
+                "webui_delete_enabled": delete_enabled,
+                "webui_last_error_ttl_minutes": ttl,
+            },
+        }

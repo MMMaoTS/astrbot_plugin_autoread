@@ -132,17 +132,17 @@ class AutoReadWebUIAPI:
         self.webui = webui_service
 
     # ------------------------------------------------------------------
-    # 响应格式（与 AstrBot Plugin Page bridge 约定一致）
+    # 响应格式
     # ------------------------------------------------------------------
 
     @staticmethod
     def _ok(data):
-        """成功响应：bridge 通过 response.data?.data 解包后返回 data 给前端。"""
+        """成功响应：status="ok" 时 Dashboard 自动解包 data 字段返回给前端。"""
         return {"status": "ok", "success": True, "data": data}
 
     @staticmethod
     def _err(message: str):
-        """错误响应：bridge 检测 status==="error" 后抛出异常，前端 catch 显示。"""
+        """错误响应：status="error" 时 Dashboard 抛出异常，前端 catch 显示 message。"""
         return {"status": "error", "message": message}
 
     def register_routes(self):
@@ -232,6 +232,42 @@ class AutoReadWebUIAPI:
                 self._backup_history,
                 ["GET"],
                 "Import history",
+            )
+            ctx.register_web_api(
+                f"/{p}/books/delete",
+                self._delete_book,
+                ["POST"],
+                "Delete book (requires webui_delete_enabled)",
+            )
+            ctx.register_web_api(
+                f"/{p}/notes/delete",
+                self._delete_note,
+                ["POST"],
+                "Delete note (requires webui_delete_enabled)",
+            )
+            ctx.register_web_api(
+                f"/{p}/sessions/cancel",
+                self._cancel_task,
+                ["POST"],
+                "Cancel reading task by session_id",
+            )
+            ctx.register_web_api(
+                f"/{p}/sessions/clear-finished",
+                self._clear_finished_tasks,
+                ["POST"],
+                "Clear finished/cancelled task records",
+            )
+            ctx.register_web_api(
+                f"/{p}/status/clear-error",
+                self._clear_error,
+                ["POST"],
+                "Clear all last_error records",
+            )
+            ctx.register_web_api(
+                f"/{p}/status",
+                self._get_status,
+                ["GET"],
+                "Get capabilities and config status",
             )
             logger.info("[AutoRead WebUI] WebUI API routes registered")
         except Exception:
@@ -442,4 +478,95 @@ class AutoReadWebUIAPI:
             return self._ok({"items": items})
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] backup history: {exc}")
+            return self._err(str(exc))
+
+    # ==================================================================
+    # 删除
+    # ==================================================================
+
+    async def _delete_book(self):
+        try:
+            body = await _json_body()
+            book_id = str(body.get("book_id", "")).strip()
+            logger.info(f"[AutoRead WebUI] delete_book requested: book_id={book_id}")
+            if not book_id:
+                return self._err("缺少 book_id")
+            result = await self.webui.delete_book(book_id)
+            logger.info(f"[AutoRead WebUI] delete_book done: {result.get('message', '')}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except PermissionError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] delete_book error: {exc}")
+            return self._err(str(exc))
+
+    async def _delete_note(self):
+        try:
+            body = await _json_body()
+            book_id = str(body.get("book_id", "")).strip()
+            record_id = str(body.get("record_id", "")).strip()
+            logger.info(f"[AutoRead WebUI] delete_note requested: book_id={book_id} record_id={record_id}")
+            if not book_id:
+                return self._err("缺少 book_id")
+            if not record_id:
+                return self._err("缺少 record_id")
+            result = await self.webui.delete_note(book_id, record_id)
+            logger.info(f"[AutoRead WebUI] delete_note done: {result.get('message', '')}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except PermissionError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] delete_note error: {exc}")
+            return self._err(str(exc))
+
+    # ==================================================================
+    # 任务管理
+    # ==================================================================
+
+    async def _cancel_task(self):
+        try:
+            body = await _json_body()
+            session_id = str(body.get("session_id", "")).strip()
+            logger.info(f"[AutoRead WebUI] cancel_task requested: session_id={session_id}")
+            if not session_id:
+                return self._err("缺少 session_id")
+            result = await self.webui.cancel_task(session_id)
+            logger.info(f"[AutoRead WebUI] cancel_task done: {result.get('message', '')}")
+            return self._ok(result)
+        except ValueError as exc:
+            return self._err(str(exc))
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] cancel_task error: {exc}")
+            return self._err(str(exc))
+
+    async def _clear_finished_tasks(self):
+        try:
+            return self._ok(await self.webui.clear_finished_tasks())
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] clear_finished_tasks error: {exc}")
+            return self._err(str(exc))
+
+    # ==================================================================
+    # 错误管理
+    # ==================================================================
+
+    async def _clear_error(self):
+        try:
+            logger.info("[AutoRead WebUI] clear_error requested")
+            result = await self.webui.clear_error()
+            logger.info(f"[AutoRead WebUI] clear_error done: {result}")
+            return self._ok(result)
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] clear_error error: {exc}")
+            return self._err(str(exc))
+
+    async def _get_status(self):
+        try:
+            return self._ok(await self.webui.get_status())
+        except Exception as exc:
+            logger.error(f"[AutoRead WebUI] get_status error: {exc}")
             return self._err(str(exc))

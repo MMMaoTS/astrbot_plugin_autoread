@@ -48,6 +48,17 @@
 |--------|------|--------|------|
 | `reading_persona_prompt` | text | （见默认值） | 阅读笔记生成时的额外提示词 |
 
+### WebUI 功能开关
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `webui_enabled` | bool | true | 是否启用 WebUI 管理页面 |
+| `webui_upload_enabled` | bool | true | 是否允许 WebUI 上传书籍 |
+| `webui_max_upload_mb` | int | 10 | WebUI 上传文件大小上限（MB） |
+| `webui_delete_enabled` | bool | **false** | 允许 WebUI 删除书籍和笔记。**危险操作，默认关闭，前后端双重校验** |
+| `webui_last_error_ttl_minutes` | int | 30 | 最后错误在 WebUI 中的显示时长（分钟），超时自动隐藏 |
+| `webui_notes_export_enabled` | bool | true | 是否允许 WebUI 导出笔记 |
+
 ## auto_share_mode 取值
 
 - `none`：永不主动分享，只保存笔记

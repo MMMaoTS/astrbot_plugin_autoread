@@ -202,9 +202,21 @@
         "hint": "单位：MB。",
         "default": 10
       },
+      "webui_delete_enabled": {
+        "type": "bool",
+        "description": "允许 WebUI 删除数据",
+        "hint": "开启后允许在 WebUI 中删除书籍和笔记。属于危险操作，请谨慎开启。",
+        "default": false
+      },
+      "webui_last_error_ttl_minutes": {
+        "type": "int",
+        "description": "错误显示时长",
+        "hint": "最后错误在 WebUI 中保留的分钟数，过期后自动隐藏。最小 1 分钟。",
+        "default": 30
+      },
       "webui_allow_book_delete": {
         "type": "bool",
-        "description": "允许删除书籍",
+        "description": "允许删除书籍（已弃用，请使用 webui_delete_enabled）",
         "default": false
       },
       "webui_notes_export_enabled": {

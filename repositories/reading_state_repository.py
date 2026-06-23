@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import uuid
@@ -218,21 +219,6 @@ class ReadingStateStore:
         state = await self.load_state()
         return state.get("sessions", {})
 
-    # ------------------------------------------------------------------
-    # Notes (跨书查询，供 WebUI 使用)
-    # ------------------------------------------------------------------
-
-    async def count_notes_for_book(self, book_id: str) -> int:
-        notes_path = self.data_dir / "notes" / f"{book_id}.notes.jsonl"
-        if not notes_path.exists():
-            return 0
-        count = 0
-        with open(notes_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    count += 1
-        return count
-
     async def count_all_notes(self) -> int:
         notes_dir = self.data_dir / "notes"
         if not notes_dir.exists():
@@ -366,4 +352,127 @@ class ReadingStateStore:
         session = state["sessions"].get(umo)
         if session:
             session["last_error"] = error
+            session["last_error_at"] = self._now_iso()
             await self.save_state(state)
+
+    # ------------------------------------------------------------------
+    # 删除
+    # ------------------------------------------------------------------
+
+    async def delete_book(self, book_id: str) -> dict | None:
+        """删除书籍记录及其关联文件（chunks、notes、原始文件）。
+        返回被删除的 book meta，若不存在则返回 None。
+        """
+        state = await self.load_state()
+        book = state.get("books", {}).pop(book_id, None)
+        if book is None:
+            return None
+
+        # 删除关联磁盘文件
+        for path_key in ("source_path", "chunks_path", "notes_path"):
+            rel = book.get(path_key, "")
+            if rel:
+                abs_path = self.data_dir / rel
+                try:
+                    if abs_path.exists():
+                        abs_path.unlink()
+                except OSError:
+                    pass
+
+        await self.save_state(state)
+        return book
+
+    async def count_notes_for_book(self, book_id: str) -> int:
+        notes_path = self.data_dir / "notes" / f"{book_id}.notes.jsonl"
+        if not notes_path.exists():
+            return 0
+        try:
+            with open(notes_path, "r", encoding="utf-8") as f:
+                return sum(1 for line in f if line.strip())
+        except OSError:
+            return 0
+
+    async def delete_note(self, book_id: str, record_id: str) -> dict | None:
+        """从 JSONL 中删除指定 record_id 的笔记。原子写入，返回被删除的 note 或 None。"""
+        notes_path = self.data_dir / "notes" / f"{book_id}.notes.jsonl"
+        if not notes_path.exists():
+            return None
+
+        # 读取全部行，过滤目标 record_id
+        lines = []
+        deleted = None
+        try:
+            with open(notes_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line_stripped = line.strip()
+                    if not line_stripped:
+                        continue
+                    try:
+                        note = json.loads(line_stripped)
+                    except json.JSONDecodeError:
+                        lines.append(line)
+                        continue
+                    rid = note.get("record_id") or note.get("note_id") or ""
+                    if rid == record_id and deleted is None:
+                        deleted = note
+                        continue
+                    lines.append(line)
+        except OSError:
+            return None
+
+        if deleted is None:
+            return None
+
+        # 原子写回
+        tmp_path = notes_path.with_suffix(".jsonl.tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+            os.replace(tmp_path, notes_path)
+        except OSError:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise
+
+        return deleted
+
+    # ------------------------------------------------------------------
+    # 错误管理
+    # ------------------------------------------------------------------
+
+    async def clear_all_last_errors(self) -> int:
+        """清除所有 session 的 last_error。返回清除数量。"""
+        state = await self.load_state()
+        count = 0
+        for session in state.get("sessions", {}).values():
+            if session.get("last_error"):
+                session["last_error"] = None
+                session["last_error_at"] = None
+                count += 1
+        if count:
+            await self.save_state(state)
+        return count
+
+    async def clear_session(self, umo: str) -> None:
+        """从 state 中完全移除非活跃 session（enabled=false 且无 current_book_id 的 session）。"""
+        state = await self.load_state()
+        session = state["sessions"].get(umo)
+        if session is None:
+            return
+        enabled = session.get("enabled", True)
+        has_book = bool(session.get("current_book_id"))
+        if enabled or has_book:
+            return  # 不删除活跃或正在阅读的 session
+        state["sessions"].pop(umo, None)
+        await self.save_state(state)
+
+    async def resolve_session_umo(self, masked_id: str) -> str | None:
+        """通过 masked session id (s_xxxxxxxx) 反查 umo。"""
+        if not masked_id.startswith("s_"):
+            return None
+        state = await self.load_state()
+        for umo in state.get("sessions", {}):
+            h = hashlib.sha256(umo.encode()).hexdigest()[:8]
+            if f"s_{h}" == masked_id:
+                return umo
+        return None
