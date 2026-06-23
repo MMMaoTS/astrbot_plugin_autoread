@@ -242,11 +242,15 @@ tr:hover td { background: rgba(0,0,0,0.02); }
           <option value="none">不分享</option><option value="daily">每日</option>
           <option value="chapter">按章节</option><option value="every_step">每段</option><option value="finish">读完</option>
         </select></label>
+        <label><span>启用对话工具</span><input type="checkbox" name="enable_llm_tools" /></label>
+        <label><span>允许模型主动推进</span><input type="checkbox" name="allow_llm_read_next" /></label>
       </fieldset>
 
       <fieldset><legend>阅读设置</legend>
         <label><span>切片长度（字符）</span><input type="number" name="chunk_size" min="100" max="50000" /></label>
         <label><span>切片重叠（字符）</span><input type="number" name="chunk_overlap" min="0" max="5000" /></label>
+        <label><span>笔记上限</span><input type="number" name="max_notes_per_book" min="1" max="10000" /></label>
+        <label><span>允许导入的扩展名</span><input type="text" name="allowed_extensions" placeholder=".txt, .md" maxlength="100" /></label>
         <label><span>阅读提示词</span><textarea name="reading_persona_prompt" rows="3" maxlength="4000"></textarea></label>
       </fieldset>
 
@@ -289,6 +293,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
       </fieldset>
 
       <fieldset><legend>页面设置</legend>
+        <label><span>启用 WebUI 页面</span><input type="checkbox" name="webui_enabled" /></label>
         <label><span>允许上传书籍</span><input type="checkbox" name="webui_upload_enabled" /></label>
         <label><span>上传大小上限（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
         <label><span>允许删除书籍</span><input type="checkbox" name="webui_allow_book_delete" /></label>
@@ -632,6 +637,46 @@ function updateNotesBookFilter(bookItems) {
 }
 
 // ======================================================================
+// Providers (model list for settings)
+// ======================================================================
+function loadProviders() {
+  return apiGet("providers").then(function(data) {
+    _providersCache = (data && data.items) ? data.items : [];
+    var list = document.getElementById("provider-list");
+    if (!list) return;
+    var hint = document.getElementById("provider-hint");
+    if (!_providersCache.length) {
+      list.innerHTML = "";
+      if (hint) { hint.hidden = false; hint.textContent = (data && data.message) || ""; }
+      return;
+    }
+    if (hint) hint.hidden = true;
+    list.innerHTML = _providersCache.map(function(p) {
+      return '<button type="button" class="provider-item" data-provider-id="' + escapeHtml(p.provider_id) + '" title="' + escapeHtml(p.type || "chat") + '">' + escapeHtml(p.display_name) + '</button>';
+    }).join("");
+    list.querySelectorAll(".provider-item").forEach(function(item) {
+      item.addEventListener("click", function() {
+        var pid = item.dataset.providerId;
+        var rEl = document.getElementById("hidden-reader-provider-id");
+        var tEl = document.getElementById("hidden-thinker-provider-id");
+        var rDisp = document.getElementById("display-reader-provider");
+        var tDisp = document.getElementById("display-thinker-provider");
+        if (rEl && !rEl.value) rEl.value = pid;
+        if (tEl && !tEl.value) tEl.value = pid;
+        if (rDisp && !rDisp.value) rDisp.value = pid;
+        if (tDisp && !tDisp.value) tDisp.value = pid;
+        list.querySelectorAll(".provider-item").forEach(function(el) { el.classList.remove("selected"); });
+        item.classList.add("selected");
+      });
+    });
+  }).catch(function(err) {
+    console.error("[AutoRead] loadProviders error:", err);
+    var list = document.getElementById("provider-list");
+    if (list) list.innerHTML = '<p class="hint">无法获取模型列表: ' + escapeHtml(err.message) + '</p>';
+  });
+}
+
+// ======================================================================
 // Settings
 // ======================================================================
 function loadSettings() {
@@ -710,14 +755,31 @@ function updateModelStrategyUI(strategy) {
 
 function saveSettings() {
   var form = document.getElementById("settings-form");
-  var fd = new FormData(form);
   var flatPatch = {};
-  fd.forEach(function(value, key) {
-    var el = form.querySelector('[name="' + key + '"]');
-    if (el && el.type === "checkbox") { flatPatch[key] = el.checked; }
-    else if (el && el.type === "number") { if (value !== "") flatPatch[key] = Number(value); }
-    else { flatPatch[key] = value; }
+
+  // 遍历所有带 name 的表单元素（不只是 FormData），确保未选中的 checkbox 也会被包含
+  var elements = form.querySelectorAll("[name]");
+  elements.forEach(function(el) {
+    var key = el.getAttribute("name");
+    if (!key) return;
+    if (el.type === "checkbox") {
+      flatPatch[key] = el.checked;
+    } else if (el.type === "number") {
+      var val = el.value;
+      if (val !== "") flatPatch[key] = Number(val);
+    } else if (el.type === "select-one" || el.type === "select-multiple") {
+      flatPatch[key] = el.value;
+    } else if (el.tagName === "TEXTAREA") {
+      flatPatch[key] = el.value || "";
+    } else if (el.type === "text" || el.type === "hidden") {
+      flatPatch[key] = el.value;
+    }
   });
+
+  // 列表字段: 字符串 -> 数组
+  if (typeof flatPatch.allowed_extensions === "string") {
+    flatPatch.allowed_extensions = flatPatch.allowed_extensions.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  }
 
   // 包装为分组结构
   var groupedPatch = {};
@@ -745,7 +807,7 @@ function getGroupForKey(key) {
     enable_llm_tools: "Basic_Settings", allow_llm_read_next: "Basic_Settings",
     chunk_size: "Reading_Settings", chunk_overlap: "Reading_Settings",
     reading_persona_prompt: "Reading_Settings", max_notes_per_book: "Reading_Settings",
-    allow_url_import: "Reading_Settings", memory_backend: "Reading_Settings",
+    allow_url_import: "Reading_Settings", allowed_extensions: "Reading_Settings", memory_backend: "Reading_Settings",
     model_strategy: "Model_Settings",
     reader_provider_id: "Model_Settings", thinker_provider_id: "Model_Settings",
     single_provider_id: "Model_Settings",

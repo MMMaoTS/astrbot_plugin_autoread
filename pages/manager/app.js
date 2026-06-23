@@ -367,7 +367,7 @@ function getGroupForKey(key) {
     enable_llm_tools: "Basic_Settings", allow_llm_read_next: "Basic_Settings",
     chunk_size: "Reading_Settings", chunk_overlap: "Reading_Settings",
     reading_persona_prompt: "Reading_Settings", max_notes_per_book: "Reading_Settings",
-    allow_url_import: "Reading_Settings", memory_backend: "Reading_Settings",
+    allow_url_import: "Reading_Settings", allowed_extensions: "Reading_Settings", memory_backend: "Reading_Settings",
     model_strategy: "Model_Settings",
     reader_provider_id: "Model_Settings", thinker_provider_id: "Model_Settings",
     single_provider_id: "Model_Settings",
@@ -464,18 +464,30 @@ function updateModelStrategyUI(strategy) {
 
 async function saveSettings() {
   const form = document.getElementById("settings-form");
-  const formData = new FormData(form);
   const flatPatch = {};
 
-  for (const [key, value] of formData.entries()) {
-    const el = form.querySelector(`[name="${key}"]`);
-    if (el && el.type === "checkbox") {
+  // 遍历所有带 name 的表单元素（不只是 FormData），确保未选中的 checkbox 也会被包含
+  const elements = form.querySelectorAll("[name]");
+  elements.forEach(el => {
+    const key = el.getAttribute("name");
+    if (!key) return;
+    if (el.type === "checkbox") {
       flatPatch[key] = el.checked;
-    } else if (el && el.type === "number") {
-      if (value !== "") flatPatch[key] = Number(value);
-    } else {
-      flatPatch[key] = value;
+    } else if (el.type === "number") {
+      const val = el.value;
+      if (val !== "") flatPatch[key] = Number(val);
+    } else if (el.type === "select-one" || el.type === "select-multiple") {
+      flatPatch[key] = el.value;
+    } else if (el.tagName === "TEXTAREA") {
+      flatPatch[key] = el.value || "";
+    } else if (el.type === "text" || el.type === "hidden") {
+      flatPatch[key] = el.value;
     }
+  });
+
+  // 列表字段: 字符串 -> 数组
+  if (typeof flatPatch.allowed_extensions === "string") {
+    flatPatch.allowed_extensions = flatPatch.allowed_extensions.split(",").map(s => s.trim()).filter(Boolean);
   }
 
   // 包装为分组结构

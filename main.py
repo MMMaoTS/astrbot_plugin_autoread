@@ -290,7 +290,7 @@ class AutoReadPlugin(Star):
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         result = await self.autoread_service.list_books()
@@ -303,7 +303,7 @@ class AutoReadPlugin(Star):
         Args:
             preference(string): 用户或角色表达的阅读偏好，例如"童话""科幻""哲学""轻松一点""你自己感兴趣的"。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         umo = event.unified_msg_origin
@@ -320,7 +320,7 @@ class AutoReadPlugin(Star):
             book_id(string): 要开始阅读的书籍 ID，必须来自 autoread_list_books 或 autoread_choose_book 的结果。
             interval_minutes(number): 阅读间隔，单位分钟。默认 1440 分钟，即每天一次。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         umo = event.unified_msg_origin
@@ -342,10 +342,10 @@ class AutoReadPlugin(Star):
         Args:
             reason(string): 本次主动阅读的原因，例如"用户问我最近读到哪里了""我想继续读一点""定时任务触发"。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
-        if not self.config.get("allow_llm_read_next", True):
+        if not self.config_service.get("allow_llm_read_next", True):
             yield event.plain_result("当前配置不允许模型通过自然对话主动推进阅读。")
             return
         umo = event.unified_msg_origin
@@ -367,7 +367,7 @@ class AutoReadPlugin(Star):
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         umo = event.unified_msg_origin
@@ -385,7 +385,7 @@ class AutoReadPlugin(Star):
         Args:
             limit(number): 返回最近多少条笔记，默认 5 条。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         umo = event.unified_msg_origin
@@ -399,7 +399,7 @@ class AutoReadPlugin(Star):
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         result = await self.autoread_service.pause(event.unified_msg_origin)
@@ -412,7 +412,7 @@ class AutoReadPlugin(Star):
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         result = await self.autoread_service.resume(event.unified_msg_origin)
@@ -425,7 +425,7 @@ class AutoReadPlugin(Star):
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
-        if not self.config.get("enable_llm_tools", True):
+        if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
         result = await self.autoread_service.stop(event.unified_msg_origin)
