@@ -88,7 +88,7 @@ _SETTINGS_VALIDATORS = {
     "single_provider_display_name": lambda v: isinstance(v, str) and len(v) <= 120,
     "reading_persona_prompt": lambda v: isinstance(v, str) and len(v) <= 4000,
     "pro_upgrade_importance_threshold": lambda v: isinstance(v, (int, float)) and 0 <= v <= 1,
-    "max_deeper_reviews_per_chapter": lambda v: isinstance(v, (int, float)) and 0 <= v <= 100,
+    "max_deeper_reviews_per_chapter": lambda v: isinstance(v, (int, float)) and 0 <= v <= 20,
 }
 
 

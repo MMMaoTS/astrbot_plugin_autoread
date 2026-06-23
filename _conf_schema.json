@@ -1,200 +1,200 @@
 {
   "enabled": {
-    "description": "是否启用自主阅读插件",
+    "description": "启用自主阅读。",
     "type": "bool",
     "default": true
   },
   "enable_llm_tools": {
-    "description": "是否启用自然对话工具调用入口",
+    "description": "启用自然对话工具入口。",
     "type": "bool",
     "default": true
   },
   "allow_llm_read_next": {
-    "description": "是否允许 LLM 在自然对话中主动调用 autoread_read_next 推进阅读",
+    "description": "允许模型在对话中主动推进阅读。",
     "type": "bool",
     "default": true
   },
   "max_tool_read_steps_per_turn": {
-    "description": "单轮自然对话最多允许工具推进多少次阅读。第一版可只做配置预留。",
+    "description": "单轮对话最多推进次数。",
     "type": "int",
     "default": 1
   },
   "default_interval_minutes": {
-    "description": "默认阅读间隔，单位分钟",
+    "description": "默认阅读间隔，单位分钟。",
     "type": "int",
     "default": 1440
   },
   "worker_tick_seconds": {
-    "description": "后台 worker 扫描间隔，单位秒。测试时可设为 30 或 60。",
+    "description": "后台检查间隔，单位秒。",
     "type": "int",
     "default": 60
   },
   "chunk_size": {
-    "description": "每次阅读的最大字符数",
+    "description": "每次阅读最大字符数。",
     "type": "int",
     "default": 1800
   },
   "chunk_overlap": {
-    "description": "切片重叠字符数，避免上下文断裂",
+    "description": "相邻切片重叠字符数。",
     "type": "int",
     "default": 120
   },
   "max_notes_per_book": {
-    "description": "每本书最多保留多少条阶段性笔记",
+    "description": "每本书最多保留笔记数。",
     "type": "int",
     "default": 200
   },
   "auto_share_mode": {
-    "description": "主动分享模式",
+    "description": "主动分享方式。",
     "type": "string",
     "options": ["none", "daily", "chapter", "every_step", "finish"],
     "default": "chapter"
   },
   "allow_url_import": {
-    "description": "是否允许从 URL 导入文本。第一版建议关闭。",
+    "description": "允许从链接导入文本。",
     "type": "bool",
     "default": false
   },
   "allowed_extensions": {
-    "description": "允许导入的本地文本扩展名",
+    "description": "允许导入的文件扩展名。",
     "type": "list",
     "default": [".txt", ".md"]
   },
   "memory_backend": {
-    "description": "长期记忆后端。第一版建议 none，仅保存插件自己的 notes。",
+    "description": "长期记忆后端。",
     "type": "string",
     "options": ["none", "angel_memory", "livingmemory"],
     "default": "none"
   },
   "reading_persona_prompt": {
-    "description": "阅读笔记生成时的额外提示词。会被发送给模型，请勿写入框架/平台/插件等工程术语。",
+    "description": "阅读笔记提示词。",
     "type": "text",
     "default": "你正在以当前人格身份进行持续阅读。这不是临时检索、问答总结或资料查询，而是属于你自己的阶段性阅读经历。请保持当前人格设定、称呼习惯、表达气质和情绪反应方式，像真实读者一样记录你实际读到这里时的理解、细节注意、疑问、情绪和观点变化。只能基于本次实际读到的文本片段写笔记，不要假装读过后文或整本书，不要编造剧情、主题、作者意图或人物关系。如果信息不足，应诚实记录「目前还不足以判断」。笔记应体现持续阅读的进度感：你只是读到了这里，后续理解可以随着继续阅读而改变。"
   },
   "reading_model_mode": {
-    "description": "阅读笔记生成使用的模型选择策略：current_session 使用当前会话模型，fixed_provider 使用固定模型，default 使用系统默认模型",
+    "description": "（旧）模型选择策略。",
     "type": "string",
     "options": ["current_session", "fixed_provider", "default"],
     "default": "current_session"
   },
   "reading_provider_id": {
-    "description": "固定阅读模型 provider_id。仅在 reading_model_mode 为 fixed_provider 时使用。",
+    "description": "（旧）固定模型。",
     "type": "string",
     "default": ""
   },
   "reading_provider_display_name": {
-    "description": "固定阅读模型的显示名称，仅用于 WebUI 展示。",
+    "description": "（旧）固定模型名称。",
     "type": "string",
     "default": ""
   },
   "fallback_to_current_session_provider": {
-    "description": "当固定模型不可用时，是否允许回退到当前会话模型",
+    "description": "模型不可用时回退到当前会话。",
     "type": "bool",
     "default": true
   },
   "reading_model_strategy": {
-    "description": "阅读模型策略：current_session 使用当前会话模型，fixed_single 使用单一模型，two_stage 使用双模型分工",
+    "description": "阅读模型分工方式。",
     "type": "string",
     "options": ["current_session", "fixed_single", "two_stage"],
     "default": "two_stage"
   },
   "cheap_provider_id": {
-    "description": "低成本阅读模型 provider_id，用于高频 chunk 阅读",
+    "description": "低成本模型。",
     "type": "string",
     "default": ""
   },
   "cheap_provider_display_name": {
-    "description": "低成本阅读模型显示名称，仅用于 WebUI 展示",
+    "description": "低成本模型名称。",
     "type": "string",
     "default": ""
   },
   "quality_provider_id": {
-    "description": "高质量阅读模型 provider_id，用于章节总结、重要分享和全书总结",
+    "description": "高质量模型。",
     "type": "string",
     "default": ""
   },
   "quality_provider_display_name": {
-    "description": "高质量阅读模型显示名称，仅用于 WebUI 展示",
+    "description": "高质量模型名称。",
     "type": "string",
     "default": ""
   },
   "single_provider_id": {
-    "description": "单模型模式下使用的 provider_id",
+    "description": "单模型模式使用的模型。",
     "type": "string",
     "default": ""
   },
   "single_provider_display_name": {
-    "description": "单模型模式下使用的模型显示名称，仅用于 WebUI 展示",
+    "description": "单模型名称。",
     "type": "string",
     "default": ""
   },
   "chunk_note_model_role": {
-    "description": "chunk 阅读笔记使用的模型角色",
+    "description": "片段阅读使用的模型角色。",
     "type": "string",
     "options": ["cheap", "quality", "current_session", "default"],
     "default": "cheap"
   },
   "chapter_note_model_role": {
-    "description": "章节总结使用的模型角色",
+    "description": "章节总结使用的模型角色。",
     "type": "string",
     "options": ["cheap", "quality", "current_session", "default"],
     "default": "cheap"
   },
   "important_note_model_role": {
-    "description": "重要片段、重要章节和用户可见重要分享使用的模型角色",
+    "description": "重要内容使用的模型角色。",
     "type": "string",
     "options": ["cheap", "quality", "current_session", "default"],
     "default": "quality"
   },
   "final_review_model_role": {
-    "description": "全书总结使用的模型角色",
+    "description": "全书总结使用的模型角色。",
     "type": "string",
     "options": ["cheap", "quality", "current_session", "default"],
     "default": "quality"
   },
   "memory_note_model_role": {
-    "description": "长期阅读记忆沉淀使用的模型角色",
+    "description": "记忆沉淀使用的模型角色。",
     "type": "string",
     "options": ["cheap", "quality", "current_session", "default"],
     "default": "quality"
   },
   "pro_upgrade_importance_threshold": {
-    "description": "升级到高质量模型的 importance_score 阈值",
+    "description": "升级高质量模型的阈值。",
     "type": "float",
     "default": 0.75
   },
   "enable_deeper_review": {
-    "description": "是否允许对重要片段进行高质量模型复核",
+    "description": "启用重要内容复核。",
     "type": "bool",
     "default": true
   },
   "max_deeper_reviews_per_chapter": {
-    "description": "每章最多允许多少次高质量模型复核",
+    "description": "每章最多复核次数。",
     "type": "int",
     "default": 3
   },
   "webui_enabled": {
-    "description": "是否启用 AutoRead WebUI 管理页面",
+    "description": "启用管理页面。",
     "type": "bool",
     "default": true
   },
   "webui_upload_enabled": {
-    "description": "是否允许通过 WebUI 上传 txt/md 书籍",
+    "description": "允许页面上传书籍。",
     "type": "bool",
     "default": true
   },
   "webui_max_upload_mb": {
-    "description": "WebUI 单个书籍上传大小限制，单位 MB",
+    "description": "单本上传大小上限，单位 MB。",
     "type": "int",
     "default": 10
   },
   "webui_allow_book_delete": {
-    "description": "是否允许 WebUI 删除或归档书籍。第一版建议关闭。",
+    "description": "允许删除或归档书籍。",
     "type": "bool",
     "default": false
   },
   "webui_notes_export_enabled": {
-    "description": "是否允许 WebUI 导出阅读笔记",
+    "description": "允许导出阅读笔记。",
     "type": "bool",
     "default": true
   }

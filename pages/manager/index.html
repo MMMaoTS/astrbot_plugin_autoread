@@ -18,7 +18,6 @@
   --warning: #f59e0b;
   --card-bg: #ffffff;
   --radius: 8px;
-  --shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 html[data-theme="dark"] {
   --bg: #111827;
@@ -32,7 +31,6 @@ html[data-theme="dark"] {
   --success: #4ade80;
   --warning: #fbbf24;
   --card-bg: #1f2937;
-  --shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -122,7 +120,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 .settings-form legend { font-weight: 700; font-size: 14px; padding: 0 8px; }
 .settings-form label { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .settings-form label:last-of-type { border-bottom: none; }
-.settings-form label span { min-width: 160px; font-size: 13px; color: var(--muted); flex-shrink: 0; }
+.settings-form label span { min-width: 140px; font-size: 13px; color: var(--text); flex-shrink: 0; }
 .settings-form input[type="text"], .settings-form input[type="number"], .settings-form select, .settings-form textarea {
   flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--card-bg); color: var(--text); font-size: 13px; font-family: inherit;
@@ -131,19 +129,8 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 .settings-form textarea { min-height: 80px; resize: vertical; }
 .settings-actions { display: flex; gap: 8px; padding-top: 8px; }
 .setting-group { padding-left: 0; }
-.provider-list-section {
-  margin-top: 12px; padding: 12px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--card-bg);
-}
-.provider-list-section h4 { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-.provider-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.provider-item {
-  padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius);
-  font-size: 12px; cursor: pointer; color: var(--text); background: var(--panel); transition: border-color 0.15s;
-}
-.provider-item:hover { border-color: var(--primary); }
-.provider-item.selected { border-color: var(--primary); background: rgba(37,99,235,0.08); }
-html[data-theme="dark"] .provider-item.selected { background: rgba(96,165,250,0.15); }
+.advanced-toggle { font-size: 12px; color: var(--muted); cursor: pointer; padding: 8px 0; }
+.advanced-toggle:hover { color: var(--primary); }
 @media (max-width: 768px) {
   .detail-panel { width: 100vw; max-width: 100vw; }
   .overview-cards { grid-template-columns: repeat(2, 1fr); }
@@ -158,7 +145,7 @@ html[data-theme="dark"] .provider-item.selected { background: rgba(96,165,250,0.
 
 <header class="app-header">
   <h1>AutoRead 管理</h1>
-  <button id="btn-refresh" class="btn btn-secondary" title="刷新所有数据">刷新</button>
+  <button id="btn-refresh" class="btn btn-secondary" title="刷新">刷新</button>
 </header>
 
 <nav class="tab-nav">
@@ -192,7 +179,7 @@ html[data-theme="dark"] .provider-item.selected { background: rgba(96,165,250,0.
       <input type="file" id="upload-input" accept=".txt,.md" />
       <button id="btn-upload" class="btn btn-primary">上传并导入</button>
     </div>
-    <p class="hint">仅支持 .txt / .md 文件，最大 10 MB。上传后自动导入并切片。</p>
+    <p class="hint">支持 .txt / .md，上限 10 MB，上传后自动导入。</p>
   </section>
   <section class="books">
     <h2>书籍管理</h2>
@@ -244,79 +231,97 @@ html[data-theme="dark"] .provider-item.selected { background: rgba(96,165,250,0.
   <section class="settings-panel">
     <h2>插件设置</h2>
     <form id="settings-form" class="settings-form">
+
       <fieldset><legend>基础设置</legend>
-        <label><span>启用插件</span><input type="checkbox" name="enabled" /></label>
-        <label><span>默认阅读间隔（分钟）</span><input type="number" name="default_interval_minutes" min="1" max="10080" /></label>
-        <label><span>Worker 扫描间隔（秒）</span><input type="number" name="worker_tick_seconds" min="10" max="3600" /></label>
-        <label><span>主动分享模式</span><select name="auto_share_mode">
+        <label><span>启用阅读</span><input type="checkbox" name="enabled" /></label>
+        <label><span>阅读间隔（分钟）</span><input type="number" name="default_interval_minutes" min="1" max="10080" /></label>
+        <label><span>后台检查间隔（秒）</span><input type="number" name="worker_tick_seconds" min="10" max="3600" /></label>
+        <label><span>分享方式</span><select name="auto_share_mode">
           <option value="none">不分享</option><option value="daily">每日</option>
           <option value="chapter">按章节</option><option value="every_step">每段</option><option value="finish">读完</option>
         </select></label>
       </fieldset>
+
       <fieldset><legend>阅读设置</legend>
-        <label><span>每次阅读字符数</span><input type="number" name="chunk_size" min="100" max="50000" /></label>
-        <label><span>切片重叠字符数</span><input type="number" name="chunk_overlap" min="0" max="5000" /></label>
-        <label><span>角色可见阅读提示词</span><textarea name="reading_persona_prompt" rows="4" maxlength="4000"></textarea></label>
+        <label><span>切片长度（字符）</span><input type="number" name="chunk_size" min="100" max="50000" /></label>
+        <label><span>切片重叠（字符）</span><input type="number" name="chunk_overlap" min="0" max="5000" /></label>
+        <label><span>阅读提示词</span><textarea name="reading_persona_prompt" rows="3" maxlength="4000"></textarea></label>
       </fieldset>
-      <fieldset><legend>阅读模型分工设置</legend>
+
+      <fieldset><legend>模型设置</legend>
         <label><span>模型策略</span><select name="reading_model_strategy" id="setting-model-strategy">
-          <option value="two_stage">双模型分工</option><option value="fixed_single">单模型</option><option value="current_session">当前会话</option>
+          <option value="two_stage">双模型分工</option>
+          <option value="fixed_single">单模型</option>
+          <option value="current_session">当前会话</option>
         </select></label>
+
         <div id="setting-two-stage-group" class="setting-group">
-          <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">低成本模型 (cheap) — 高频 chunk 阅读</h4>
-          <label><span>Provider ID</span><input type="text" name="cheap_provider_id" maxlength="200" id="setting-cheap-provider-id" /></label>
-          <label><span>显示名称</span><input type="text" name="cheap_provider_display_name" maxlength="120" /></label>
-          <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">高质量模型 (quality) — 章节总结、重要分享、全书总结</h4>
-          <label><span>Provider ID</span><input type="text" name="quality_provider_id" maxlength="200" id="setting-quality-provider-id" /></label>
-          <label><span>显示名称</span><input type="text" name="quality_provider_display_name" maxlength="120" /></label>
-          <div class="provider-list-section">
-            <h4>可用模型列表</h4>
-            <button type="button" id="btn-refresh-providers" class="btn btn-small btn-secondary">刷新模型列表</button>
-            <div id="provider-list" class="provider-list"></div>
-            <p class="hint" id="provider-hint" hidden>当前运行环境未提供可用模型列表接口，请手动填写 provider_id。</p>
-          </div>
+          <label><span>低成本模型</span><select name="cheap_provider_id" id="select-cheap-provider"></select></label>
+          <input type="hidden" name="cheap_provider_display_name" id="hidden-cheap-display-name" />
+          <label><span>高质量模型</span><select name="quality_provider_id" id="select-quality-provider"></select></label>
+          <input type="hidden" name="quality_provider_display_name" id="hidden-quality-display-name" />
+          <p class="hint">低成本模型用于高频片段阅读，高质量模型用于章节总结和重要看法。</p>
         </div>
+
         <div id="setting-single-group" class="setting-group" hidden>
-          <h4 style="margin:8px 0;font-size:13px;color:var(--primary)">单模型配置</h4>
-          <label><span>Provider ID</span><input type="text" name="single_provider_id" maxlength="200" /></label>
-          <label><span>显示名称</span><input type="text" name="single_provider_display_name" maxlength="120" /></label>
+          <label><span>阅读模型</span><select name="single_provider_id" id="select-single-provider"></select></label>
+          <input type="hidden" name="single_provider_display_name" id="hidden-single-display-name" />
+          <p class="hint">所有阅读任务使用同一个模型。</p>
         </div>
-        <h4 style="margin:8px 0;font-size:13px;color:var(--muted)">各阶段模型角色分配</h4>
-        <label><span>chunk 阅读使用</span><select name="chunk_note_model_role">
+
+        <button type="button" id="btn-refresh-providers" class="btn btn-small btn-secondary" style="margin-bottom:8px">刷新提供商列表</button>
+        <p id="provider-status" class="hint"></p>
+
+        <details id="advanced-provider-section" style="margin-top:8px">
+          <summary class="advanced-toggle">高级：手动填写 provider_id</summary>
+          <p class="hint" style="margin:8px 0">仅在提供商列表无法正常加载时使用。正常情况下请从上方的下拉列表中选择。</p>
+          <label><span>低成本模型 ID</span><input type="text" name="cheap_provider_id_manual" maxlength="200" id="input-cheap-manual" /></label>
+          <label><span>低成本模型名称</span><input type="text" name="cheap_provider_display_name_manual" maxlength="120" /></label>
+          <label><span>高质量模型 ID</span><input type="text" name="quality_provider_id_manual" maxlength="200" id="input-quality-manual" /></label>
+          <label><span>高质量模型名称</span><input type="text" name="quality_provider_display_name_manual" maxlength="120" /></label>
+        </details>
+
+        <h4 style="margin:8px 0;font-size:13px;color:var(--muted)">各阶段模型角色</h4>
+        <label><span>片段阅读</span><select name="chunk_note_model_role">
           <option value="cheap">低成本</option><option value="quality">高质量</option><option value="current_session">当前会话</option>
         </select></label>
-        <label><span>章节总结使用</span><select name="chapter_note_model_role">
+        <label><span>章节总结</span><select name="chapter_note_model_role">
           <option value="cheap">低成本</option><option value="quality">高质量</option><option value="current_session">当前会话</option>
         </select></label>
-        <label><span>重要总结使用</span><select name="important_note_model_role">
+        <label><span>重要内容</span><select name="important_note_model_role">
           <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
         </select></label>
-        <label><span>全书总结使用</span><select name="final_review_model_role">
+        <label><span>全书总结</span><select name="final_review_model_role">
           <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
         </select></label>
-        <label><span>记忆沉淀使用</span><select name="memory_note_model_role">
+        <label><span>记忆沉淀</span><select name="memory_note_model_role">
           <option value="quality">高质量</option><option value="cheap">低成本</option><option value="current_session">当前会话</option>
         </select></label>
-        <label><span>重要性升级阈值</span><input type="number" name="pro_upgrade_importance_threshold" min="0" max="1" step="0.05" /></label>
-        <label><span>启用深入复核</span><input type="checkbox" name="enable_deeper_review" /></label>
-        <label><span>每章最多复核次数</span><input type="number" name="max_deeper_reviews_per_chapter" min="0" max="100" /></label>
-        <label><span>不可用时回退到当前会话</span><input type="checkbox" name="fallback_to_current_session_provider" /></label>
+        <label><span>重要性阈值</span><input type="number" name="pro_upgrade_importance_threshold" min="0" max="1" step="0.05" /></label>
+        <label><span>深入复核</span><input type="checkbox" name="enable_deeper_review" /></label>
+        <label><span>每章复核上限</span><input type="number" name="max_deeper_reviews_per_chapter" min="0" max="20" /></label>
+        <label><span>不可用时回退</span><input type="checkbox" name="fallback_to_current_session_provider" /></label>
       </fieldset>
+
+      <!-- 旧字段隐藏 -->
       <input type="hidden" name="reading_model_mode" value="current_session" />
       <input type="hidden" name="reading_provider_id" value="" />
       <input type="hidden" name="reading_provider_display_name" value="" />
-      <fieldset><legend>WebUI 设置</legend>
-        <label><span>允许 WebUI 上传</span><input type="checkbox" name="webui_upload_enabled" /></label>
-        <label><span>上传大小限制（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
-        <label><span>允许删除/归档</span><input type="checkbox" name="webui_allow_book_delete" /></label>
+
+      <fieldset><legend>页面设置</legend>
+        <label><span>允许上传书籍</span><input type="checkbox" name="webui_upload_enabled" /></label>
+        <label><span>上传大小上限（MB）</span><input type="number" name="webui_max_upload_mb" min="1" max="100" /></label>
+        <label><span>允许删除书籍</span><input type="checkbox" name="webui_allow_book_delete" /></label>
         <label><span>允许导出笔记</span><input type="checkbox" name="webui_notes_export_enabled" /></label>
       </fieldset>
+
       <fieldset><legend>扩展设置</legend>
-        <label><span>允许 URL 导入</span><input type="checkbox" name="allow_url_import" /></label>
+        <label><span>链接导入</span><input type="checkbox" name="allow_url_import" /></label>
         <label><span>记忆后端</span><select name="memory_backend">
           <option value="none">无</option><option value="angel_memory">天使之魂</option><option value="livingmemory">LivingMemory</option>
         </select></label>
       </fieldset>
+
       <div class="settings-actions">
         <button type="submit" id="btn-save-settings" class="btn btn-primary">保存设置</button>
         <button type="button" id="btn-reload-settings" class="btn btn-secondary">重新加载</button>
@@ -341,6 +346,7 @@ html[data-theme="dark"] .provider-item.selected { background: rgba(96,165,250,0.
 (function() {
 "use strict";
 var bridge = window.AstrBotPluginPage;
+var _providersCache = [];
 
 // ======================================================================
 // API
@@ -387,7 +393,7 @@ function escapeHtml(str) {
 function truncate(str, max) {
   if (!str) return "";
   max = max || 80;
-  return str.length > max ? str.slice(0, max) + "…" : str;
+  return str.length > max ? str.slice(0, max) + "..." : str;
 }
 function formatTime(iso) {
   if (!iso) return "-";
@@ -456,7 +462,7 @@ function loadBooks(page) {
     renderBooksTable(data.items);
     renderBooksPagination(data);
     updateNotesBookFilter(data.items);
-  }).catch(function(err) { showError("加载书籍列表失败: " + err.message); });
+  }).catch(function(err) { showError("加载书籍失败: " + err.message); });
 }
 function renderBooksTable(items) {
   var tbody = document.getElementById("books-tbody");
@@ -505,13 +511,13 @@ function renderBookDetail(data) {
 function uploadBook() {
   var input = document.getElementById("upload-input");
   var file = input.files[0];
-  if (!file) { showError("请先选择一个文件"); return; }
+  if (!file) { showError("请先选择文件"); return; }
   var ext = "." + file.name.split(".").pop().toLowerCase();
   if (ext !== ".txt" && ext !== ".md") { showError("仅支持 .txt 和 .md 文件"); return; }
   var btn = document.getElementById("btn-upload");
   btn.disabled = true; btn.textContent = "上传中...";
   uploadFile("books/upload", file).then(function(result) {
-    showMessage("已导入《" + result.title + "》，" + result.total_chunks + " 段，共 " + result.total_chars.toLocaleString() + " 字符");
+    showMessage("已导入: " + result.title + " (" + result.total_chunks + " 段)");
     input.value = "";
     return Promise.all([loadOverview(), loadBooks()]);
   }).catch(function(err) { showError("上传失败: " + (err.message || "未知错误")); })
@@ -524,7 +530,7 @@ function uploadBook() {
 function loadSessions() {
   return apiGet("sessions").then(function(data) {
     renderSessionsTable(data.items);
-  }).catch(function(err) { showError("加载会话列表失败: " + err.message); });
+  }).catch(function(err) { showError("加载会话失败: " + err.message); });
 }
 function renderSessionsTable(items) {
   var tbody = document.getElementById("sessions-tbody");
@@ -532,7 +538,7 @@ function renderSessionsTable(items) {
   tbody.innerHTML = items.map(function(s) {
     return '<tr><td><code>' + escapeHtml(s.session_id) + '</code></td><td>' + escapeHtml(s.title) + '</td>' +
       '<td>' + s.current_chunk_index + '/' + s.total_chunks + '</td>' +
-      '<td>' + (s.paused ? "⏸ 已暂停" : "📖 阅读中") + '</td>' +
+      '<td>' + (s.paused ? "已暂停" : "阅读中") + '</td>' +
       '<td>' + formatTime(s.last_read_at) + '</td><td>' + formatTime(s.next_read_at) + '</td></tr>';
   }).join("");
 }
@@ -584,7 +590,7 @@ function renderNoteDetail(data) {
     '<dt>章节</dt><dd>' + escapeHtml(data.chapter_title || data.chapter || "") + '</dd>' +
     '<dt>重要性</dt><dd>' + (data.importance_score || 0).toFixed(2) + (data.needs_deeper_review ? " (需复核)" : "") + '</dd>' +
     '<dt>模型角色</dt><dd>' + escapeHtml(mu.model_role || data.model_role || "-") + '</dd>' +
-    '<dt>Provider</dt><dd>' + escapeHtml(mu.provider_display_name || data.provider_display_name || "-") + '</dd>' +
+    '<dt>模型名称</dt><dd>' + escapeHtml(mu.provider_display_name || data.provider_display_name || "-") + '</dd>' +
     '<dt>创建时间</dt><dd>' + formatTime(data.created_at) + '</dd>' +
     '<dt>标签</dt><dd>' + ((data.tags || []).join(", ") || "-") + '</dd></dl>' +
     '<div class="field-block"><h4>摘要</h4><p>' + escapeHtml(data.summary) + '</p></div>' +
@@ -622,6 +628,20 @@ function renderSettings(settings) {
     var el = form.querySelector('[name="' + key + '"]');
     if (!el) return;
     if (el.type === "checkbox") { el.checked = !!settings[key]; }
+    else if (el.tagName === "SELECT") {
+      // 先确保选项存在，再设值
+      var val = settings[key] != null ? String(settings[key]) : "";
+      if (val) {
+        var exists = Array.from(el.options).some(function(o) { return o.value === val; });
+        if (!exists && el.id && el.id.indexOf("select-") === 0) {
+          // provider select: 值可能来自已保存配置但尚未刷新列表，追加选项
+          var displayName = settings[key.replace("_provider_id", "_provider_display_name")] || val;
+          var opt = document.createElement("option");
+          opt.value = val; opt.textContent = displayName; el.appendChild(opt);
+        }
+      }
+      el.value = val;
+    }
     else { el.value = settings[key] != null ? settings[key] : ""; }
   });
   updateModelStrategyUI(settings.reading_model_strategy || "two_stage");
@@ -637,17 +657,37 @@ function saveSettings() {
   var fd = new FormData(form);
   var patch = {};
   fd.forEach(function(value, key) {
+    // 跳过手动输入字段名后缀 _manual
+    if (key.indexOf("_manual") !== -1) return;
     var el = form.querySelector('[name="' + key + '"]');
     if (el && el.type === "checkbox") { patch[key] = el.checked; }
     else if (el && el.type === "number") { if (value !== "") patch[key] = Number(value); }
     else { patch[key] = value; }
   });
+
+  // provider display_name 从下拉框同步
+  syncProviderDisplayNames(patch);
+
   var btn = document.getElementById("btn-save-settings");
   btn.disabled = true; btn.textContent = "保存中...";
   return apiPost("settings", { settings: patch }).then(function(result) {
     showMessage(result.message || "设置已保存");
-  }).catch(function(err) { showError("保存设置失败: " + (err.message || "未知错误")); })
+  }).catch(function(err) { showError("保存失败: " + (err.message || "未知错误")); })
   .finally(function() { btn.disabled = false; btn.textContent = "保存设置"; });
+}
+function syncProviderDisplayNames(patch) {
+  var selCheap = document.getElementById("select-cheap-provider");
+  var selQuality = document.getElementById("select-quality-provider");
+  var selSingle = document.getElementById("select-single-provider");
+  if (selCheap && selCheap.selectedOptions.length) {
+    patch.cheap_provider_display_name = selCheap.selectedOptions[0].textContent;
+  }
+  if (selQuality && selQuality.selectedOptions.length) {
+    patch.quality_provider_display_name = selQuality.selectedOptions[0].textContent;
+  }
+  if (selSingle && selSingle.selectedOptions.length) {
+    patch.single_provider_display_name = selSingle.selectedOptions[0].textContent;
+  }
 }
 
 // ======================================================================
@@ -655,41 +695,43 @@ function saveSettings() {
 // ======================================================================
 function loadProviders() {
   return apiGet("providers").then(function(data) {
-    renderProviderOptions(data);
+    _providersCache = data.items || [];
+    renderProviderSelects(data);
   }).catch(function(err) {
     console.error("[AutoRead] loadProviders error:", err);
-    document.getElementById("provider-list").innerHTML = '<p class="hint">无法获取模型列表: ' + escapeHtml(err.message) + '</p>';
+    document.getElementById("provider-status").textContent = "无法读取提供商列表。";
   });
 }
-function renderProviderOptions(data) {
-  var list = document.getElementById("provider-list");
-  var hint = document.getElementById("provider-hint");
-  if (!data.items || !data.items.length) {
-    list.innerHTML = ""; hint.hidden = false;
-    if (data.message) hint.textContent = data.message;
-    return;
+function renderProviderSelects(data) {
+  var items = data.items || [];
+  var statusEl = document.getElementById("provider-status");
+  var manualInput = document.getElementById("manual_input_supported") ? data.manual_input_supported : !items.length;
+
+  if (!items.length) {
+    statusEl.textContent = data.message || "暂无可用提供商。可在下方高级选项中手动填写。";
+    statusEl.style.color = "var(--warning)";
+  } else {
+    statusEl.textContent = "已加载 " + items.length + " 个提供商。";
+    statusEl.style.color = "var(--success)";
   }
-  hint.hidden = true;
-  list.innerHTML = data.items.map(function(p) {
-    return '<button type="button" class="provider-item" data-provider-id="' + escapeHtml(p.provider_id) +
-      '" data-provider-name="' + escapeHtml(p.display_name) + '" title="' + escapeHtml(p.type || "chat") + '">' + escapeHtml(p.display_name) + '</button>';
-  }).join("");
-  list.querySelectorAll(".provider-item").forEach(function(item) {
-    item.addEventListener("click", function() {
-      var pid = item.dataset.providerId;
-      var name = item.dataset.providerName;
-      var cheapEl = document.getElementById("setting-cheap-provider-id");
-      var qualityEl = document.getElementById("setting-quality-provider-id");
-      if (cheapEl && !cheapEl.value) cheapEl.value = pid;
-      if (qualityEl && !qualityEl.value) qualityEl.value = pid;
-      var dnCheap = document.querySelector('[name="cheap_provider_display_name"]');
-      var dnQuality = document.querySelector('[name="quality_provider_display_name"]');
-      if (dnCheap) dnCheap.value = name;
-      if (dnQuality) dnQuality.value = name;
-      list.querySelectorAll(".provider-item").forEach(function(el) { el.classList.remove("selected"); });
-      item.classList.add("selected");
-    });
+
+  // 填充下拉框
+  fillProviderSelect("select-cheap-provider", items);
+  fillProviderSelect("select-quality-provider", items);
+  fillProviderSelect("select-single-provider", items);
+}
+function fillProviderSelect(selectId, items) {
+  var sel = document.getElementById(selectId);
+  if (!sel) return;
+  var currentVal = sel.value;
+  sel.innerHTML = '<option value="">-- 请选择 --</option>';
+  items.forEach(function(p) {
+    var opt = document.createElement("option");
+    opt.value = p.provider_id;
+    opt.textContent = p.display_name;
+    sel.appendChild(opt);
   });
+  if (currentVal) sel.value = currentVal;
 }
 
 // ======================================================================
