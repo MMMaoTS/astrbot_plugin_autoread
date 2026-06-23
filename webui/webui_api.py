@@ -1,15 +1,14 @@
 """WebUI API 路由处理层。
 
 - handler 按 register_web_api 协议接收 path params。
-- 通过 astrbot.api.web.request 代理读取请求数据。
+- 通过 Quart request 代理读取请求数据（handler 运行在 Quart test context 内）。
 - 返回 dict（自动转为 JSONResponse）或 FileResponse。
-- WebUI API 可用性以 context.register_web_api 是否存在为准。
+- 不依赖 astrbot.api.web。
 """
 
 from pathlib import Path
 
 from astrbot.api import logger
-from astrbot.api.web import request as _req
 from starlette.responses import FileResponse
 
 from .webui_service import WebUIService
@@ -18,31 +17,85 @@ PLUGIN_NAME = "astrbot_plugin_autoread"
 
 
 # ---------------------------------------------------------------------------
-# 请求读取辅助
+# 异步上传文件包装
 # ---------------------------------------------------------------------------
+
+class _AsyncUploadFile:
+    """包装 Quart FileStorage / Starlette UploadFile，统一提供 async read()。
+
+    Quart 的 request.files 返回 FileStorage，其 read() 是同步的；
+    但 webui_service 使用 await upload.read()。本包装类统一为 async 接口。
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+        self.filename = getattr(raw, "filename", None) or "unknown"
+        self.content_type = getattr(raw, "content_type", None)
+
+    async def read(self, size: int = -1) -> bytes:
+        data = self._raw.read(size)
+        # 如果 read 返回协程，await 它；否则直接返回 bytes
+        if hasattr(data, "__await__"):
+            return await data
+        return data
+
+
+# ---------------------------------------------------------------------------
+# 请求读取（基于 Quart request，在 bind_quart_request_context 中可用）
+# ---------------------------------------------------------------------------
+
+def _get_quart_request():
+    """获取当前 Quart request 代理。
+
+    Handler 运行在 call_request_view → bind_quart_request_context 创建的
+    Quart test_request_context 内，因此 quart.request 可用。
+    """
+    try:
+        from quart import request as _qr
+        return _qr
+    except ImportError:
+        return None
+
 
 def _query_str(key: str, default: str = "", max_len: int = 100) -> str:
     """读取查询字符串参数。"""
-    val = _req.query.get(key, "").strip()
+    req = _get_quart_request()
+    if req is None:
+        return default
+    val = (req.args.get(key, "") or "").strip()
     return val[:max_len] if val else default
 
 
 def _query_int(key: str, default: int = 1, min_val: int = 1, max_val: int = 100) -> int:
     """读取整数查询参数。"""
     try:
-        return max(min_val, min(_req.query.get(key, default, type=int), max_val))
-    except (TypeError, ValueError):
+        val = int(_query_str(key, str(default)))
+        return max(min_val, min(val, max_val))
+    except (ValueError, TypeError):
         return default
 
 
 async def _json_body():
     """读取 JSON 请求体。"""
-    return await _req.json(default=None) or {}
+    req = _get_quart_request()
+    if req is None:
+        return {}
+    if hasattr(req, "get_json"):
+        data = await req.get_json(silent=True)
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
 async def _upload_files():
-    """读取上传文件。"""
-    return await _req.files()
+    """读取上传文件 multipart form。"""
+    req = _get_quart_request()
+    if req is None:
+        return {}
+    try:
+        files = await req.files
+        return files
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -188,15 +241,15 @@ class AutoReadWebUIAPI:
     async def _upload_book(self):
         try:
             files = await _upload_files()
-            upload = files.get("file")
+            upload = files.get("file") if files else None
             if upload is None:
                 return {
                     "status": "error",
                     "message": "缺少上传文件 (字段名: file)",
                     "data": None,
                 }
-
-            result = await self.webui.upload_book_file(upload)
+            wrapped = _AsyncUploadFile(upload)
+            result = await self.webui.upload_book_file(wrapped)
             import_result = await self.webui.import_uploaded_book(
                 stored_filename=result["stored_filename"]
             )
@@ -259,7 +312,7 @@ class AutoReadWebUIAPI:
     # ==================================================================
 
     async def _get_settings(self):
-        """返回 self.config 真实配置。"""
+        """返回 self.config 真实配置（分组结构）。"""
         try:
             return await self.webui.get_settings()
         except Exception as exc:
@@ -334,14 +387,15 @@ class AutoReadWebUIAPI:
     async def _backup_import_preview(self):
         try:
             files = await _upload_files()
-            upload = files.get("file")
+            upload = files.get("file") if files else None
             if upload is None:
                 return {
                     "status": "error",
                     "message": "缺少上传文件 (字段名: file)",
                     "data": None,
                 }
-            return await self.webui.parse_backup(upload)
+            wrapped = _AsyncUploadFile(upload)
+            return await self.webui.parse_backup(wrapped)
         except ValueError as exc:
             return {"status": "error", "message": str(exc), "data": None}
         except Exception as exc:
@@ -351,14 +405,15 @@ class AutoReadWebUIAPI:
     async def _backup_import_apply(self):
         try:
             files = await _upload_files()
-            upload = files.get("file")
+            upload = files.get("file") if files else None
             if upload is None:
                 return {
                     "status": "error",
                     "message": "缺少上传文件 (字段名: file)",
                     "data": None,
                 }
-            return await self.webui.import_backup_merge(upload)
+            wrapped = _AsyncUploadFile(upload)
+            return await self.webui.import_backup_merge(wrapped)
         except ValueError as exc:
             return {"status": "error", "message": str(exc), "data": None}
         except Exception as exc:
