@@ -326,32 +326,15 @@ class WebUIService:
     # ------------------------------------------------------------------
 
     async def get_settings(self) -> dict:
-        """返回当前有效配置（用于 WebUI 设置页展示）。"""
+        """返回当前有效配置（从 AstrBotConfig 读取）。"""
         settings = self.config_service.get_effective_config()
         return {
             "settings": settings,
-            "source": {
-                "uses_override_file": self.config_service.override_path.exists(),
-                "override_path": f"plugin_data/{self.config_service.override_path.name}",
-            },
+            "source": "astrbot_config",
         }
 
     async def update_settings(self, patch: dict) -> dict:
-        """更新配置 patch。校验 provider_id 是否在可用列表中。"""
-        # 校验 provider_id（如果可用列表非空且提交了 provider_id）
-        try:
-            available = await self.list_providers()
-            available_ids = {p["provider_id"] for p in available.get("items", [])}
-            if available_ids:
-                for key in ("cheap_provider_id", "quality_provider_id", "single_provider_id"):
-                    pid = patch.get(key, "")
-                    if pid and pid not in available_ids:
-                        raise ValueError(f"提供商 '{pid}' 不在可用列表中，请刷新列表后重新选择。")
-        except ValueError:
-            raise
-        except Exception:
-            pass  # 列表获取失败时跳过校验
-
+        """更新配置 patch，直接写入 AstrBotConfig 并持久化。"""
         try:
             settings = await self.config_service.update_settings(patch)
             return {

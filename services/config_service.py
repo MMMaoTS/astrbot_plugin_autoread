@@ -1,10 +1,6 @@
 """插件配置服务。
 
-职责：
-- 合并默认值、框架配置、WebUI override
-- 提供统一的配置读写接口
-- 校验 WebUI 传入的配置 patch
-- 持久化 settings_override.json
+统一读写 AstrBotConfig，不再依赖独立的 settings_override.json。
 """
 
 import json
@@ -13,58 +9,59 @@ from pathlib import Path
 
 from astrbot.api import logger
 
-# WebUI 可修改的配置白名单
-_SETTINGS_WHITELIST = frozenset({
-    # 基础
-    "enabled",
-    "enable_llm_tools",
-    "allow_llm_read_next",
-    "default_interval_minutes",
-    "worker_tick_seconds",
-    "chunk_size",
-    "chunk_overlap",
-    "auto_share_mode",
-    "allow_url_import",
-    "memory_backend",
-    "reading_persona_prompt",
-    # WebUI
-    "webui_enabled",
-    "webui_upload_enabled",
-    "webui_max_upload_mb",
-    "webui_allow_book_delete",
-    "webui_notes_export_enabled",
-    # 旧模型配置 (兼容)
-    "reading_model_mode",
-    "reading_provider_id",
-    "reading_provider_display_name",
-    "fallback_to_current_session_provider",
-    # 新模型策略
-    "reading_model_strategy",
-    # cheap provider
-    "cheap_provider_id",
-    "cheap_provider_display_name",
-    # quality provider
-    "quality_provider_id",
-    "quality_provider_display_name",
-    # single provider
-    "single_provider_id",
-    "single_provider_display_name",
-    # model_role 分配
-    "chunk_note_model_role",
-    "chapter_note_model_role",
-    "important_note_model_role",
-    "final_review_model_role",
-    "memory_note_model_role",
-    # 升级策略
-    "pro_upgrade_importance_threshold",
-    "enable_deeper_review",
-    "max_deeper_reviews_per_chapter",
-})
+# 分组前缀到 schema 字段的映射
+_GROUP_PREFIXES = {
+    "Basic_Settings": "Basic_Settings",
+    "Reading_Settings": "Reading_Settings",
+    "Model_Settings": "Model_Settings",
+    "WebUI_Settings": "WebUI_Settings",
+}
 
-# 配置校验规则
+# 分组内的字段白名单
+_GROUP_KEYS = {
+    "Basic_Settings": frozenset({
+        "enabled", "default_interval_minutes", "worker_tick_seconds",
+        "auto_share_mode", "enable_llm_tools", "allow_llm_read_next",
+    }),
+    "Reading_Settings": frozenset({
+        "chunk_size", "chunk_overlap", "reading_persona_prompt",
+        "max_notes_per_book", "allow_url_import", "allowed_extensions",
+        "memory_backend",
+    }),
+    "Model_Settings": frozenset({
+        "reading_model_strategy",
+        "cheap_provider_id", "quality_provider_id", "single_provider_id",
+        "chunk_note_model_role", "chapter_note_model_role",
+        "important_note_model_role", "final_review_model_role",
+        "memory_note_model_role",
+        "pro_upgrade_importance_threshold", "enable_deeper_review",
+        "max_deeper_reviews_per_chapter", "fallback_to_current_session_provider",
+        # 旧字段兼容（在 grouped config 下做平铺兼容）
+        "reading_model_mode", "reading_provider_id", "reading_provider_display_name",
+        "cheap_provider_display_name", "quality_provider_display_name",
+        "single_provider_display_name",
+    }),
+    "WebUI_Settings": frozenset({
+        "webui_enabled", "webui_upload_enabled", "webui_max_upload_mb",
+        "webui_allow_book_delete", "webui_notes_export_enabled",
+    }),
+}
+
+# 所有已知的 [group, key] 组合
+_ALL_KNOWN = set()
+for _g, _ks in _GROUP_KEYS.items():
+    for _k in _ks:
+        _ALL_KNOWN.add((_g, _k))
+
+# 扁平 key -> 分组
+_FLAT_TO_GROUP = {}
+for _g, _ks in _GROUP_KEYS.items():
+    for _k in _ks:
+        _FLAT_TO_GROUP[_k] = _g
+
 _ROLE_OPTIONS = ("cheap", "quality", "current_session", "default")
-_SETTINGS_VALIDATORS = {
-    "reading_model_mode": lambda v: v in ("current_session", "fixed_provider", "default"),
+
+_VALIDATORS = {
     "reading_model_strategy": lambda v: v in ("current_session", "fixed_single", "two_stage"),
     "auto_share_mode": lambda v: v in ("none", "daily", "chapter", "every_step", "finish"),
     "memory_backend": lambda v: v in ("none", "angel_memory", "livingmemory"),
@@ -78,78 +75,100 @@ _SETTINGS_VALIDATORS = {
     "chunk_overlap": lambda v: isinstance(v, (int, float)) and 0 <= v <= 5000,
     "default_interval_minutes": lambda v: isinstance(v, (int, float)) and 1 <= v <= 10080,
     "worker_tick_seconds": lambda v: isinstance(v, (int, float)) and 10 <= v <= 3600,
-    "reading_provider_id": lambda v: isinstance(v, str) and len(v) <= 200,
-    "reading_provider_display_name": lambda v: isinstance(v, str) and len(v) <= 120,
-    "cheap_provider_id": lambda v: isinstance(v, str) and len(v) <= 200,
-    "cheap_provider_display_name": lambda v: isinstance(v, str) and len(v) <= 120,
-    "quality_provider_id": lambda v: isinstance(v, str) and len(v) <= 200,
-    "quality_provider_display_name": lambda v: isinstance(v, str) and len(v) <= 120,
-    "single_provider_id": lambda v: isinstance(v, str) and len(v) <= 200,
-    "single_provider_display_name": lambda v: isinstance(v, str) and len(v) <= 120,
-    "reading_persona_prompt": lambda v: isinstance(v, str) and len(v) <= 4000,
     "pro_upgrade_importance_threshold": lambda v: isinstance(v, (int, float)) and 0 <= v <= 1,
     "max_deeper_reviews_per_chapter": lambda v: isinstance(v, (int, float)) and 0 <= v <= 20,
+    "reading_persona_prompt": lambda v: isinstance(v, str) and len(v) <= 4000,
 }
+
+_BOOL_KEYS = frozenset({
+    "enabled", "enable_llm_tools", "allow_llm_read_next",
+    "allow_url_import", "webui_enabled", "webui_upload_enabled",
+    "webui_allow_book_delete", "webui_notes_export_enabled",
+    "fallback_to_current_session_provider", "enable_deeper_review",
+})
 
 
 class ConfigService:
     """插件配置统一管理。
 
-    优先级：settings_override.json > 框架 AstrBotConfig > _conf_schema 默认值
+    优先级: AstrBotConfig (唯一主配置源)
+    启动时执行一次旧 settings_override.json 迁移。
     """
 
-    def __init__(self, raw_config, data_dir: Path):
-        self._raw_config = raw_config  # AstrBotConfig 实例
+    def __init__(self, config, data_dir: Path):
+        self._config = config  # AstrBotConfig dict 实例
         self.data_dir = data_dir
-        self.override_path = data_dir / "settings_override.json"
-        self._override_cache: dict | None = None
+        self._override_path = data_dir / "settings_override.json"
+        # 迁移旧 override（仅一次）
+        self._migrate_old_override()
 
     # ------------------------------------------------------------------
-    # 覆写文件读写
+    # 旧配置迁移
     # ------------------------------------------------------------------
 
-    def _load_override(self) -> dict:
-        if self._override_cache is not None:
-            return self._override_cache
-        if not self.override_path.exists():
-            self._override_cache = {}
-            return self._override_cache
+    def _migrate_old_override(self) -> None:
+        if not self._override_path.exists():
+            return
         try:
-            text = self.override_path.read_text(encoding="utf-8")
-            self._override_cache = json.loads(text)
-        except (json.JSONDecodeError, OSError):
-            self._override_cache = {}
-        return self._override_cache
+            old = json.loads(self._override_path.read_text(encoding="utf-8"))
+            if not old or not isinstance(old, dict):
+                return
+            migrated = 0
+            for flat_key, value in old.items():
+                group = _FLAT_TO_GROUP.get(flat_key)
+                if group is None:
+                    continue
+                # 只在官方 config 为空时才迁移
+                existing = self._config.get(group, {})
+                if isinstance(existing, dict) and not existing.get(flat_key):
+                    existing[flat_key] = value
+                    self._config[group] = existing
+                    migrated += 1
 
-    def _save_override(self, data: dict) -> None:
-        tmp = self.override_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self.override_path)
-        self._override_cache = data
+            if migrated > 0:
+                self._config.save_config()
+                logger.info(f"[AutoRead Config] Migrated {migrated} keys from old settings_override.json")
+
+            # 重命名旧文件防止重复迁移
+            migrated_path = self._override_path.with_suffix(".migrated.json")
+            os.rename(str(self._override_path), str(migrated_path))
+            logger.info("[AutoRead Config] Renamed old override -> .migrated.json")
+        except Exception as exc:
+            logger.warning(f"[AutoRead Config] Migration skipped: {exc}")
 
     # ------------------------------------------------------------------
     # 配置读取
     # ------------------------------------------------------------------
 
     def get(self, key: str, default=None):
-        """同步读取有效配置值（优先级：override > raw_config）。"""
-        override = self._load_override()
-        if key in override:
-            return override[key]
-        try:
-            return self._raw_config.get(key, default)
-        except Exception:
-            return default
+        """从分组配置读取单个 key。
+
+        自动查找 key 所属分组。例如 get("chunk_size") 会查找 Reading_Settings.chunk_size。
+        """
+        group = _FLAT_TO_GROUP.get(key)
+        if group:
+            group_dict = self._config.get(group, {})
+            if isinstance(group_dict, dict) and key in group_dict:
+                return group_dict[key]
+        # fallback: 直接查顶层
+        val = self._config.get(key)
+        if val is not None:
+            return val
+        return default
 
     async def get_async(self, key: str, default=None):
         return self.get(key, default)
 
     def get_effective_config(self) -> dict:
-        """返回完整有效配置（合并 override + raw_config + 白名单过滤）。"""
+        """返回当前完整有效配置（分组结构）。"""
         result = {}
-        # 从 raw_config 读取所有已知键
-        for key in _SETTINGS_WHITELIST:
-            result[key] = self.get(key, None)
+        for group, keys in _GROUP_KEYS.items():
+            group_dict = self._config.get(group, {})
+            if not isinstance(group_dict, dict):
+                group_dict = {}
+            result[group] = {}
+            for key in keys:
+                result[group][key] = group_dict.get(key, None)
         return result
 
     # ------------------------------------------------------------------
@@ -157,41 +176,54 @@ class ConfigService:
     # ------------------------------------------------------------------
 
     async def update_settings(self, patch: dict) -> dict:
-        """更新 WebUI 传来的配置 patch。
+        """更新配置 patch（支持分组结构或扁平结构）。
 
-        返回更新后的完整有效配置。
+        直接写入 AstrBotConfig 并调用 save_config()。
         """
         validated = await self.validate_settings_patch(patch)
-        override = dict(self._load_override())
-        override.update(validated)
-        self._save_override(override)
-        logger.info(f"[AutoRead Config] Updated {len(validated)} settings: {list(validated.keys())}")
-        return self.get_effective_config()
+        self._apply_patch(validated)
+        self._config.save_config()
+        logger.info(f"[AutoRead Config] Saved {len(validated)} setting(s) to config")
+        return dict(self._config)
+
+    def _apply_patch(self, patch: dict) -> None:
+        for group, items in patch.items():
+            if group in _GROUP_KEYS and isinstance(items, dict):
+                existing = self._config.get(group, {})
+                if not isinstance(existing, dict):
+                    existing = {}
+                existing.update(items)
+                self._config[group] = existing
 
     async def validate_settings_patch(self, patch: dict) -> dict:
-        """校验配置 patch，返回清洗后的 dict。抛出 ValueError 若校验失败。"""
-        cleaned = {}
+        """校验配置 patch（支持分组结构 {Group: {key: val}} 和扁平结构 {key: val}）。"""
+        cleaned_by_group = {}
 
-        for key, value in patch.items():
-            if key not in _SETTINGS_WHITELIST:
-                raise ValueError(f"不允许修改的配置项: {key}")
+        for top_key, top_val in patch.items():
+            if top_key in _GROUP_KEYS and isinstance(top_val, dict):
+                # 分组结构: {Model_Settings: {cheap_provider_id: ...}}
+                group = top_key
+                cleaned = {}
+                for key, value in top_val.items():
+                    if key not in _GROUP_KEYS.get(group, frozenset()):
+                        raise ValueError(f"不允许修改的配置项: {group}.{key}")
+                    self._validate_key(key, value)
+                    cleaned[key] = value
+                if cleaned:
+                    cleaned_by_group[group] = cleaned
+            elif _FLAT_TO_GROUP.get(top_key):
+                # 扁平 key: {cheap_provider_id: ...}
+                group = _FLAT_TO_GROUP[top_key]
+                self._validate_key(top_key, top_val)
+                cleaned_by_group.setdefault(group, {})[top_key] = top_val
+            else:
+                raise ValueError(f"未知配置项: {top_key}")
 
-            # 类型检查
-            validator = _SETTINGS_VALIDATORS.get(key)
-            if validator and not validator(value):
-                raise ValueError(f"配置项 {key} 的值不合法: {value!r}")
+        return cleaned_by_group
 
-            # 布尔类型强制检查
-            schema_bool_keys = {
-                "enabled", "enable_llm_tools", "allow_llm_read_next",
-                "allow_url_import", "webui_enabled", "webui_upload_enabled",
-                "webui_allow_book_delete", "webui_notes_export_enabled",
-                "fallback_to_current_session_provider",
-                "enable_deeper_review",
-            }
-            if key in schema_bool_keys and not isinstance(value, bool):
-                raise ValueError(f"配置项 {key} 必须是布尔值")
-
-            cleaned[key] = value
-
-        return cleaned
+    def _validate_key(self, key: str, value) -> None:
+        validator = _VALIDATORS.get(key)
+        if validator and not validator(value):
+            raise ValueError(f"配置项 {key} 的值不合法: {value!r}")
+        if key in _BOOL_KEYS and not isinstance(value, bool):
+            raise ValueError(f"配置项 {key} 必须是布尔值")

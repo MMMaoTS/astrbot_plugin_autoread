@@ -1,201 +1,202 @@
 {
-  "enabled": {
-    "description": "启用自主阅读。",
-    "type": "bool",
-    "default": true
+  "Basic_Settings": {
+    "type": "object",
+    "description": "基础设置",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "启用阅读",
+        "default": true
+      },
+      "default_interval_minutes": {
+        "type": "int",
+        "description": "阅读间隔",
+        "hint": "单位：分钟。",
+        "default": 1440
+      },
+      "worker_tick_seconds": {
+        "type": "int",
+        "description": "后台检查间隔",
+        "hint": "单位：秒。",
+        "default": 60
+      },
+      "auto_share_mode": {
+        "type": "string",
+        "description": "分享方式",
+        "options": ["none", "daily", "chapter", "every_step", "finish"],
+        "default": "chapter"
+      },
+      "enable_llm_tools": {
+        "type": "bool",
+        "description": "启用对话工具",
+        "default": true
+      },
+      "allow_llm_read_next": {
+        "type": "bool",
+        "description": "允许模型主动推进",
+        "default": true
+      }
+    }
   },
-  "enable_llm_tools": {
-    "description": "启用自然对话工具入口。",
-    "type": "bool",
-    "default": true
+  "Reading_Settings": {
+    "type": "object",
+    "description": "阅读设置",
+    "items": {
+      "chunk_size": {
+        "type": "int",
+        "description": "切片长度",
+        "hint": "每次阅读最大字符数。",
+        "default": 1800
+      },
+      "chunk_overlap": {
+        "type": "int",
+        "description": "切片重叠",
+        "hint": "相邻切片重叠字符数。",
+        "default": 120
+      },
+      "reading_persona_prompt": {
+        "type": "text",
+        "description": "阅读提示词",
+        "default": "你正在以当前人格身份进行持续阅读。这不是临时检索、问答总结或资料查询，而是属于你自己的阶段性阅读经历。请保持当前人格设定、称呼习惯、表达气质和情绪反应方式，像真实读者一样记录你实际读到这里时的理解、细节注意、疑问、情绪和观点变化。只能基于本次实际读到的文本片段写笔记，不要假装读过后文或整本书，不要编造剧情、主题、作者意图或人物关系。如果信息不足，应诚实记录「目前还不足以判断」。笔记应体现持续阅读的进度感：你只是读到了这里，后续理解可以随着继续阅读而改变。"
+      },
+      "max_notes_per_book": {
+        "type": "int",
+        "description": "笔记上限",
+        "default": 200
+      },
+      "allow_url_import": {
+        "type": "bool",
+        "description": "链接导入",
+        "default": false
+      },
+      "allowed_extensions": {
+        "type": "list",
+        "description": "允许导入的扩展名",
+        "default": [".txt", ".md"]
+      },
+      "memory_backend": {
+        "type": "string",
+        "description": "记忆后端",
+        "options": ["none", "angel_memory", "livingmemory"],
+        "default": "none"
+      }
+    }
   },
-  "allow_llm_read_next": {
-    "description": "允许模型在对话中主动推进阅读。",
-    "type": "bool",
-    "default": true
+  "Model_Settings": {
+    "type": "object",
+    "description": "模型设置",
+    "items": {
+      "reading_model_strategy": {
+        "type": "string",
+        "description": "模型策略",
+        "options": ["current_session", "fixed_single", "two_stage"],
+        "default": "two_stage"
+      },
+      "cheap_provider_id": {
+        "type": "string",
+        "description": "低成本模型",
+        "hint": "用于高频片段阅读。",
+        "_special": "select_provider",
+        "default": ""
+      },
+      "quality_provider_id": {
+        "type": "string",
+        "description": "高质量模型",
+        "hint": "用于章节总结和重要看法。",
+        "_special": "select_provider",
+        "default": ""
+      },
+      "single_provider_id": {
+        "type": "string",
+        "description": "单模型",
+        "hint": "单模型策略下使用。",
+        "_special": "select_provider",
+        "default": ""
+      },
+      "chunk_note_model_role": {
+        "type": "string",
+        "description": "片段模型",
+        "options": ["cheap", "quality", "current_session", "default"],
+        "default": "cheap"
+      },
+      "chapter_note_model_role": {
+        "type": "string",
+        "description": "章节模型",
+        "options": ["cheap", "quality", "current_session", "default"],
+        "default": "cheap"
+      },
+      "important_note_model_role": {
+        "type": "string",
+        "description": "重要内容模型",
+        "options": ["cheap", "quality", "current_session", "default"],
+        "default": "quality"
+      },
+      "final_review_model_role": {
+        "type": "string",
+        "description": "全书总结模型",
+        "options": ["cheap", "quality", "current_session", "default"],
+        "default": "quality"
+      },
+      "memory_note_model_role": {
+        "type": "string",
+        "description": "记忆沉淀模型",
+        "options": ["cheap", "quality", "current_session", "default"],
+        "default": "quality"
+      },
+      "pro_upgrade_importance_threshold": {
+        "type": "float",
+        "description": "重要性阈值",
+        "hint": "升级高质量模型的分数阈值。",
+        "default": 0.75
+      },
+      "enable_deeper_review": {
+        "type": "bool",
+        "description": "深入复核",
+        "default": true
+      },
+      "max_deeper_reviews_per_chapter": {
+        "type": "int",
+        "description": "每章复核上限",
+        "hint": "0-20。",
+        "default": 3
+      },
+      "fallback_to_current_session_provider": {
+        "type": "bool",
+        "description": "不可用时回退",
+        "default": true
+      }
+    }
   },
-  "max_tool_read_steps_per_turn": {
-    "description": "单轮对话最多推进次数。",
-    "type": "int",
-    "default": 1
-  },
-  "default_interval_minutes": {
-    "description": "默认阅读间隔，单位分钟。",
-    "type": "int",
-    "default": 1440
-  },
-  "worker_tick_seconds": {
-    "description": "后台检查间隔，单位秒。",
-    "type": "int",
-    "default": 60
-  },
-  "chunk_size": {
-    "description": "每次阅读最大字符数。",
-    "type": "int",
-    "default": 1800
-  },
-  "chunk_overlap": {
-    "description": "相邻切片重叠字符数。",
-    "type": "int",
-    "default": 120
-  },
-  "max_notes_per_book": {
-    "description": "每本书最多保留笔记数。",
-    "type": "int",
-    "default": 200
-  },
-  "auto_share_mode": {
-    "description": "主动分享方式。",
-    "type": "string",
-    "options": ["none", "daily", "chapter", "every_step", "finish"],
-    "default": "chapter"
-  },
-  "allow_url_import": {
-    "description": "允许从链接导入文本。",
-    "type": "bool",
-    "default": false
-  },
-  "allowed_extensions": {
-    "description": "允许导入的文件扩展名。",
-    "type": "list",
-    "default": [".txt", ".md"]
-  },
-  "memory_backend": {
-    "description": "长期记忆后端。",
-    "type": "string",
-    "options": ["none", "angel_memory", "livingmemory"],
-    "default": "none"
-  },
-  "reading_persona_prompt": {
-    "description": "阅读笔记提示词。",
-    "type": "text",
-    "default": "你正在以当前人格身份进行持续阅读。这不是临时检索、问答总结或资料查询，而是属于你自己的阶段性阅读经历。请保持当前人格设定、称呼习惯、表达气质和情绪反应方式，像真实读者一样记录你实际读到这里时的理解、细节注意、疑问、情绪和观点变化。只能基于本次实际读到的文本片段写笔记，不要假装读过后文或整本书，不要编造剧情、主题、作者意图或人物关系。如果信息不足，应诚实记录「目前还不足以判断」。笔记应体现持续阅读的进度感：你只是读到了这里，后续理解可以随着继续阅读而改变。"
-  },
-  "reading_model_mode": {
-    "description": "（旧）模型选择策略。",
-    "type": "string",
-    "options": ["current_session", "fixed_provider", "default"],
-    "default": "current_session"
-  },
-  "reading_provider_id": {
-    "description": "（旧）固定模型。",
-    "type": "string",
-    "default": ""
-  },
-  "reading_provider_display_name": {
-    "description": "（旧）固定模型名称。",
-    "type": "string",
-    "default": ""
-  },
-  "fallback_to_current_session_provider": {
-    "description": "模型不可用时回退到当前会话。",
-    "type": "bool",
-    "default": true
-  },
-  "reading_model_strategy": {
-    "description": "阅读模型分工方式。",
-    "type": "string",
-    "options": ["current_session", "fixed_single", "two_stage"],
-    "default": "two_stage"
-  },
-  "cheap_provider_id": {
-    "description": "低成本模型。",
-    "type": "string",
-    "default": ""
-  },
-  "cheap_provider_display_name": {
-    "description": "低成本模型名称。",
-    "type": "string",
-    "default": ""
-  },
-  "quality_provider_id": {
-    "description": "高质量模型。",
-    "type": "string",
-    "default": ""
-  },
-  "quality_provider_display_name": {
-    "description": "高质量模型名称。",
-    "type": "string",
-    "default": ""
-  },
-  "single_provider_id": {
-    "description": "单模型模式使用的模型。",
-    "type": "string",
-    "default": ""
-  },
-  "single_provider_display_name": {
-    "description": "单模型名称。",
-    "type": "string",
-    "default": ""
-  },
-  "chunk_note_model_role": {
-    "description": "片段阅读使用的模型角色。",
-    "type": "string",
-    "options": ["cheap", "quality", "current_session", "default"],
-    "default": "cheap"
-  },
-  "chapter_note_model_role": {
-    "description": "章节总结使用的模型角色。",
-    "type": "string",
-    "options": ["cheap", "quality", "current_session", "default"],
-    "default": "cheap"
-  },
-  "important_note_model_role": {
-    "description": "重要内容使用的模型角色。",
-    "type": "string",
-    "options": ["cheap", "quality", "current_session", "default"],
-    "default": "quality"
-  },
-  "final_review_model_role": {
-    "description": "全书总结使用的模型角色。",
-    "type": "string",
-    "options": ["cheap", "quality", "current_session", "default"],
-    "default": "quality"
-  },
-  "memory_note_model_role": {
-    "description": "记忆沉淀使用的模型角色。",
-    "type": "string",
-    "options": ["cheap", "quality", "current_session", "default"],
-    "default": "quality"
-  },
-  "pro_upgrade_importance_threshold": {
-    "description": "升级高质量模型的阈值。",
-    "type": "float",
-    "default": 0.75
-  },
-  "enable_deeper_review": {
-    "description": "启用重要内容复核。",
-    "type": "bool",
-    "default": true
-  },
-  "max_deeper_reviews_per_chapter": {
-    "description": "每章最多复核次数。",
-    "type": "int",
-    "default": 3
-  },
-  "webui_enabled": {
-    "description": "启用管理页面。",
-    "type": "bool",
-    "default": true
-  },
-  "webui_upload_enabled": {
-    "description": "允许页面上传书籍。",
-    "type": "bool",
-    "default": true
-  },
-  "webui_max_upload_mb": {
-    "description": "单本上传大小上限，单位 MB。",
-    "type": "int",
-    "default": 10
-  },
-  "webui_allow_book_delete": {
-    "description": "允许删除或归档书籍。",
-    "type": "bool",
-    "default": false
-  },
-  "webui_notes_export_enabled": {
-    "description": "允许导出阅读笔记。",
-    "type": "bool",
-    "default": true
+  "WebUI_Settings": {
+    "type": "object",
+    "description": "页面设置",
+    "items": {
+      "webui_enabled": {
+        "type": "bool",
+        "description": "启用页面",
+        "default": true
+      },
+      "webui_upload_enabled": {
+        "type": "bool",
+        "description": "允许上传",
+        "default": true
+      },
+      "webui_max_upload_mb": {
+        "type": "int",
+        "description": "上传上限",
+        "hint": "单位：MB。",
+        "default": 10
+      },
+      "webui_allow_book_delete": {
+        "type": "bool",
+        "description": "允许删除书籍",
+        "default": false
+      },
+      "webui_notes_export_enabled": {
+        "type": "bool",
+        "description": "允许导出笔记",
+        "default": true
+      }
+    }
   }
 }

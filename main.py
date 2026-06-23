@@ -47,9 +47,9 @@ class AutoReadPlugin(Star):
         (self.data_dir / "chunks").mkdir(exist_ok=True)
         (self.data_dir / "notes").mkdir(exist_ok=True)
 
-        # 配置服务（优先级：override > raw_config > schema default）
+        # 配置服务（以 AstrBotConfig 为唯一主配置源）
         self.config_service = ConfigService(
-            raw_config=self.config,
+            config=self.config,
             data_dir=self.data_dir,
         )
 
