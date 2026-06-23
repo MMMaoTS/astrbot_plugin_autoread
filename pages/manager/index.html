@@ -698,7 +698,6 @@ function renderBooksTable(items) {
       '<td>' + (b.is_active ? "是" : "-") + '</td><td>' + b.progress.percent + '% (' + b.progress.max_current_chunk_index + '/' + b.progress.total_chunks + ')</td>' +
       '<td>' + formatTime(b.created_at) + '</td><td>' +
         '<button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button> ' +
-        '<button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button> ' +
         (_deleteEnabled
           ? '<button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-book-id="' + escapeHtml(b.book_id) + '" data-book-title="' + escapeHtml(b.title) + '">删除</button>'
           : '<button type="button" class="btn btn-small btn-secondary" disabled title="删除功能未启用（请在设置中开启 webui_delete_enabled）">删除</button>') +
