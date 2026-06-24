@@ -179,9 +179,17 @@ class WebUIService:
             total_chunks = b.get("total_chunks", 0)
             percent = round(max_progress / total_chunks * 100, 2) if total_chunks > 0 else 0
 
+            # P1-3: 懒补全旧书籍元数据
+            from ..services.book_metadata import normalize_book_meta, display_title, display_author
+            normalize_book_meta(b)
+
             items.append({
                 "book_id": bid,
                 "title": b.get("title", ""),
+                "display_name": display_title(b),
+                "author": display_author(b),
+                "original_filename": b.get("original_filename", ""),
+                "aliases": b.get("aliases", []),
                 "source_type": b.get("source_type", "local"),
                 "total_chars": b.get("total_chars", 0),
                 "total_chunks": total_chunks,
@@ -225,9 +233,16 @@ class WebUIService:
 
         notes_count = await self.state_store.count_notes_for_book(book_id)
 
+        from ..services.book_metadata import normalize_book_meta, display_title, display_author
+        normalize_book_meta(book)
+
         return {
             "book_id": book.get("book_id", ""),
             "title": book.get("title", ""),
+            "display_name": display_title(book),
+            "author": display_author(book),
+            "original_filename": book.get("original_filename", ""),
+            "aliases": book.get("aliases", []),
             "source_type": book.get("source_type", "local"),
             "source_path": book.get("source_path", ""),
             "chunks_path": book.get("chunks_path", ""),

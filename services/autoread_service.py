@@ -317,13 +317,13 @@ class AutoReadService:
                 "后使用 /read import <文件名> 导入。"
             )
 
+        # P1-3: 使用 format_book_list_item 优先展示 display_name/author
+        from .book_metadata import format_book_list_item, normalize_book_meta
+
         lines = ["已导入书籍:"]
         for b in books:
-            lines.append(
-                f"  [{b['book_id']}] 《{b['title']}》 "
-                f"— {b.get('total_chunks', '?')} 段 "
-                f"({b.get('source_type', 'unknown')})"
-            )
+            normalize_book_meta(b)  # 懒补全旧数据
+            lines.append(format_book_list_item(b))
         return "\n".join(lines)
 
     # ------------------------------------------------------------------

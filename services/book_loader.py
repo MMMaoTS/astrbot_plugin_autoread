@@ -60,12 +60,16 @@ class BookLoader:
             raise ValueError("文件内容为空")
 
         # 构建 meta
-        title = resolved.stem
+        raw_title = resolved.stem
         book_id = self._generate_book_id()
+
+        # P1-3: 生成规则版元数据
+        from .book_metadata import build_book_metadata
+        metadata = build_book_metadata(resolved.name, original_title=raw_title)
 
         meta = {
             "book_id": book_id,
-            "title": title,
+            "title": metadata["title"],
             "source_type": "local",
             "source_path": f"books/{resolved.name}",
             "chunks_path": f"chunks/{book_id}.chunks.json",
@@ -73,6 +77,13 @@ class BookLoader:
             "created_at": self._now_iso(),
             "total_chars": len(text),
             "total_chunks": 0,
+            # P1-3 新增元数据字段
+            "original_filename": metadata["original_filename"],
+            "file_stem": metadata["file_stem"],
+            "author": metadata["author"],
+            "display_name": metadata["display_name"],
+            "aliases": metadata["aliases"],
+            "normalized_keys": metadata["normalized_keys"],
         }
 
         logger.info(f"[AutoRead] Imported book: {title} (id={book_id}, chars={len(text)})")

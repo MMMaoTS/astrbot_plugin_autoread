@@ -481,3 +481,24 @@ class ReadingStateStore:
             if f"s_{h}" == masked_id:
                 return umo
         return None
+
+    # ------------------------------------------------------------------
+    # 书架事件（P1-2：上传文件自动入库）
+    # ------------------------------------------------------------------
+
+    MAX_BOOKSHELF_EVENTS = 50
+
+    async def append_bookshelf_event(self, event: dict) -> None:
+        """追加一条书架事件。自动裁剪到最近 N 条。"""
+        state = await self.load_state()
+        events: list = state.setdefault("bookshelf_events", [])
+        events.append(event)
+        if len(events) > self.MAX_BOOKSHELF_EVENTS:
+            state["bookshelf_events"] = events[-self.MAX_BOOKSHELF_EVENTS:]
+        await self.save_state(state)
+
+    async def get_recent_bookshelf_events(self, limit: int = 20) -> list[dict]:
+        """获取最近书架事件。返回倒序（最新在前）。"""
+        state = await self.load_state()
+        events: list = state.get("bookshelf_events", [])
+        return list(reversed(events[-limit:]))

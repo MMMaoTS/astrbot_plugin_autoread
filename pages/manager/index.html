@@ -693,13 +693,16 @@ function renderBooksTable(items) {
   var tbody = document.getElementById("books-tbody");
   if (!items.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无书籍。请上传 txt/md 文件导入。</td></tr>'; return; }
   tbody.innerHTML = items.map(function(b) {
-    return '<tr><td>' + escapeHtml(b.title) + '</td><td><code>' + escapeHtml(b.book_id) + '</code></td>' +
-      '<td>' + b.total_chars.toLocaleString() + '</td><td>' + b.total_chunks + '</td><td>' + b.notes_count + '</td>' +
-      '<td>' + (b.is_active ? "是" : "-") + '</td><td>' + b.progress.percent + '% (' + b.progress.max_current_chunk_index + '/' + b.progress.total_chunks + ')</td>' +
+    var dname = b.display_name || b.title || '?';
+    var titleCell = escapeHtml(dname);
+    if (b.author) { titleCell += ' <span class="author">——' + escapeHtml(b.author) + '</span>'; }
+    return '<tr><td>' + titleCell + '</td><td><code>' + escapeHtml(b.book_id) + '</code></td>' +
+      '<td>' + (b.total_chars || 0).toLocaleString() + '</td><td>' + (b.total_chunks || 0) + '</td><td>' + (b.notes_count || 0) + '</td>' +
+      '<td>' + (b.is_active ? "是" : "-") + '</td><td>' + (b.progress ? b.progress.percent + '% (' + b.progress.max_current_chunk_index + '/' + b.progress.total_chunks + ')' : '-') + '</td>' +
       '<td>' + formatTime(b.created_at) + '</td><td>' +
         '<button class="btn btn-small btn-secondary" data-action="book-detail" data-book-id="' + escapeHtml(b.book_id) + '">详情</button> ' +
         (_deleteEnabled
-          ? '<button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-book-id="' + escapeHtml(b.book_id) + '" data-book-title="' + escapeHtml(b.title) + '">删除</button>'
+          ? '<button type="button" class="btn btn-small btn-danger" data-action="book-delete" data-book-id="' + escapeHtml(b.book_id) + '" data-book-title="' + escapeHtml(dname) + '">删除</button>'
           : '<button type="button" class="btn btn-small btn-secondary" disabled title="删除功能未启用（请在设置中开启 webui_delete_enabled）">删除</button>') +
       '</td></tr>';
   }).join("");
@@ -739,6 +742,8 @@ function saveBookTitle(bookId, inputEl, displayEl, editRow) {
 
 function renderBookDetail(data) {
   var body = document.getElementById("book-detail-body");
+  // P1-3.2: 优先使用 display_name，回退到 title
+  var dname = data.display_name || data.title || '?';
   var sessionsHtml = data.active_sessions.length
     ? data.active_sessions.map(function(s) {
         return '<div style="margin-bottom:6px;padding:8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">' +
@@ -746,24 +751,38 @@ function renderBookDetail(data) {
           ' | 状态: ' + (s.paused ? "已暂停" : "阅读中") + '<br>上次: ' + formatTime(s.last_read_at) + ' | 下次: ' + formatTime(s.next_read_at) + '</div>';
       }).join("")
     : '<p style="color:var(--muted);font-size:13px">暂无活跃会话</p>';
+
+  // 作者行（有值时显示）
+  var authorRow = data.author
+    ? '<dt>作者</dt><dd>' + escapeHtml(data.author) + '</dd>'
+    : '';
+
+  // 原始文件名行（与 source_path 不同时显示）
+  var origFileRow = (data.original_filename && data.source_path && data.source_path.indexOf(data.original_filename) < 0)
+    ? '<dt>原始文件名</dt><dd>' + escapeHtml(data.original_filename) + '</dd>'
+    : '';
+
   body.innerHTML =
     '<dl>' +
     '<dt>书名</dt>' +
     '<dd>' +
-      '<span id="book-detail-title-display">' + escapeHtml(data.title) + '</span>' +
+      '<span id="book-detail-title-display">' + escapeHtml(dname) + '</span>' +
       '<span id="book-detail-title-edit-row" style="display:none">' +
-        '<input type="text" id="book-detail-title-input" value="' + escapeHtml(data.title) + '" maxlength="120" style="width:200px;padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card-bg);color:var(--text);font-size:13px" /> ' +
+        '<input type="text" id="book-detail-title-input" value="' + escapeHtml(dname) + '" maxlength="120" style="width:200px;padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card-bg);color:var(--text);font-size:13px" /> ' +
         '<button type="button" class="btn btn-small btn-primary" data-action="book-title-edit-save" data-book-id="' + escapeHtml(data.book_id) + '">保存</button> ' +
         '<button type="button" class="btn btn-small btn-secondary" data-action="book-title-edit-cancel">取消</button>' +
       '</span> ' +
       '<button type="button" class="btn btn-small btn-secondary" data-action="book-title-edit-start" data-book-id="' + escapeHtml(data.book_id) + '" id="book-detail-edit-btn" style="margin-left:8px">编辑</button>' +
     '</dd>' +
+    authorRow +
     '<dt>book_id</dt><dd><code>' + escapeHtml(data.book_id) + '</code></dd>' +
     '<dt>来源</dt><dd>' + escapeHtml(data.source_type) + '</dd>' +
-    '<dt>总字符数</dt><dd>' + data.total_chars.toLocaleString() + '</dd>' +
-    '<dt>切片数</dt><dd>' + data.total_chunks + '</dd>' +
-    '<dt>笔记数</dt><dd>' + data.notes_count + '</dd>' +
-    '<dt>创建时间</dt><dd>' + formatTime(data.created_at) + '</dd></dl>' +
+    '<dt>总字符数</dt><dd>' + (data.total_chars || 0).toLocaleString() + '</dd>' +
+    '<dt>切片数</dt><dd>' + (data.total_chunks || 0) + '</dd>' +
+    '<dt>笔记数</dt><dd>' + (data.notes_count || 0) + '</dd>' +
+    '<dt>创建时间</dt><dd>' + formatTime(data.created_at) + '</dd>' +
+    origFileRow +
+    '</dl>' +
     '<div class="field-block" style="margin-top:12px"><h4>存储路径</h4><p>' + escapeHtml(data.source_path) + '</p></div>' +
     '<div class="field-block"><h4>活跃会话</h4>' + sessionsHtml + '</div>';
 }

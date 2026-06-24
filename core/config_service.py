@@ -10,6 +10,16 @@ _GROUP_KEYS = {
     "Basic_Settings": frozenset({
         "enabled", "default_interval_minutes", "worker_tick_seconds",
         "auto_share_mode", "enable_llm_tools", "allow_llm_read_next",
+        # B-first: LLM 角色表达开关（按输出分类）
+        "enable_role_expr_command_query",
+        "enable_role_expr_read_action",
+        "enable_role_expr_notes",
+        "enable_role_expr_worker_share",
+        "enable_role_expr_natural_chat",
+        # UMO 配置化：允许启用自然读书能力的 UMO 列表
+        "enabled_umos",
+        # P1-2：上传文件自动入库
+        "auto_import_uploaded_books",
     }),
     "Reading_Settings": frozenset({
         "chunk_size", "chunk_overlap", "reading_persona_prompt",
@@ -61,11 +71,16 @@ _BOOL_KEYS = frozenset({
     "allow_url_import", "webui_enabled", "webui_upload_enabled",
     "webui_delete_enabled", "webui_allow_book_delete", "webui_notes_export_enabled",
     "enable_stage_routing", "enable_deeper_review",
+    "enable_role_expr_command_query", "enable_role_expr_read_action",
+    "enable_role_expr_notes", "enable_role_expr_worker_share",
+    "enable_role_expr_natural_chat",
+    "auto_import_uploaded_books",
 })
 
 # 列表类型字段（AstrBot 原生设置面板可能将 list 存为 JSON 字符串）
 _LIST_KEYS = frozenset({
     "allowed_extensions",
+    "enabled_umos",
 })
 
 

@@ -18,6 +18,12 @@ from .services.backup_service import BackupService
 from .worker.reading_worker import ReadingWorker
 from .core.page_service import WebUIService
 from .core.page_api import AutoReadWebUIAPI
+from .services.read_action_result import (
+    ReadActionResult,
+    OutputCategory,
+    get_policy,
+)
+from .services.role_response_composer import RoleResponseComposer
 
 PLUGIN_NAME = "astrbot_plugin_autoread"
 
@@ -59,6 +65,12 @@ class AutoReadPlugin(Star):
 
         # 模型路由器
         self.model_router = ModelRouter(
+            config_service=self.config_service,
+        )
+
+        # B-first 分层骨架：角色表达组件
+        self.role_composer = RoleResponseComposer(
+            context=self.context,
             config_service=self.config_service,
         )
 
@@ -166,6 +178,58 @@ class AutoReadPlugin(Star):
             if ev is not None:
                 return ev
         return event_or_context
+
+    # ==================================================================
+    # UMO 配置化：能力生效范围判断
+    # ==================================================================
+
+    def _resolve_umo(self, event) -> str | None:
+        """从事件中解析 UMO（unified_msg_origin）。
+
+        优先使用 AstrBot 标准字段 unified_msg_origin。
+        """
+        umo = getattr(event, "unified_msg_origin", None)
+        if umo and isinstance(umo, str) and umo.strip():
+            return umo.strip()
+        return None
+
+    def _is_umo_enabled(self, event) -> bool:
+        """判断当前事件 UMO 是否在 enabled_umos 配置列表中。
+
+        规则：
+        - enabled_umos 为空 → False（默认不启用自然化能力）
+        - 无法解析 UMO → False
+        - UMO 在列表中 → True
+
+        /read 兜底命令不受此限制。
+        """
+        enabled_umos = self.config_service.get("enabled_umos", [])
+        if not enabled_umos:
+            return False
+
+        umo = self._resolve_umo(event)
+        if umo is None:
+            logger.debug("[AutoRead UMO] Cannot resolve UMO from event, natural ability disabled")
+            return False
+
+        if umo in enabled_umos:
+            return True
+
+        logger.debug(f"[AutoRead UMO] UMO not in enabled_umos list")
+        return False
+
+    def _check_umo_or_skip(self, event) -> str | None:
+        """UMO 守卫：返回跳过消息（需 yield），或 None 表示通过。
+
+        LLM Tool handler 中调用:
+            skip_msg = self._check_umo_or_skip(event)
+            if skip_msg is not None:
+                yield event.plain_result(skip_msg)
+                return
+        """
+        if not self._is_umo_enabled(event):
+            return "自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。"
+        return None
 
     async def initialize(self):
         """插件初始化时启动后台 worker。"""
@@ -276,10 +340,60 @@ class AutoReadPlugin(Star):
 
     @read.command("status")
     async def read_status(self, event: AstrMessageEvent):
-        """查看当前阅读进度。"""
+        """查看当前阅读进度（B-first 分层验证切片）。
+
+        走新骨架: ReadActionResult → OutputPolicy → RoleResponseComposer。
+        管理类/禁用/无任务场景保持插件直出。
+        """
         umo = event.unified_msg_origin
-        result = await self.autoread_service.get_status(umo)
-        yield event.plain_result(result)
+
+        # 1. 获取原始业务数据
+        fallback_text = await self.autoread_service.get_status(umo)
+        session = await self.state_store.get_session(umo)
+
+        # 2. 构建结构化结果
+        result = ReadActionResult(
+            action="status",
+            success=True,
+            message=fallback_text,
+            output_category=OutputCategory.COMMAND_QUERY,
+        )
+
+        # 如果无进行中任务，保持管理类直出
+        if session is None or not session.get("current_book_id"):
+            result.output_category = OutputCategory.MANAGEMENT
+            result.apply_policy()
+            logger.info(
+                f"[AutoRead] /read status: no active session, "
+                f"fallback to direct output. {result.policy_summary()}"
+            )
+            yield event.plain_result(fallback_text)
+            return
+
+        # 3. 填充结构化信息
+        result.book_title = session.get("current_book_title")
+        current_idx = session.get("current_chunk_index", 0)
+        total = session.get("total_chunks", 0)
+        result.progress = f"第 {current_idx}/{total} 段"
+
+        if total > 0:
+            pct = round(current_idx / total * 100, 1)
+            result.progress += f"（{pct}%）"
+
+        if session.get("paused"):
+            result.progress += " [已暂停]"
+
+        result.apply_policy()
+
+        # 4. 尝试 LLM 表达
+        response = await self.role_composer.compose(result, umo=umo)
+        was_composed = getattr(result, "_composed", False)
+
+        logger.info(
+            f"[AutoRead] /read status: composed={was_composed} "
+            f"{result.policy_summary()}"
+        )
+        yield event.plain_result(response)
 
     @read.command("notes")
     async def read_notes(self, event: AstrMessageEvent, limit: str = "5"):
@@ -475,6 +589,9 @@ class AutoReadPlugin(Star):
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
+            return
         result = await self.autoread_service.list_books()
         yield event.plain_result(result)
 
@@ -488,6 +605,9 @@ class AutoReadPlugin(Star):
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
+            return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
             return
         umo = event.unified_msg_origin
         result = await self.autoread_service.choose_book(umo=umo, preference=preference)
@@ -506,6 +626,9 @@ class AutoReadPlugin(Star):
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
+            return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
             return
         umo = event.unified_msg_origin
         result = await self.autoread_service.start_book(
@@ -529,6 +652,9 @@ class AutoReadPlugin(Star):
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
+            return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
             return
         if not self.config_service.get("allow_llm_read_next", True):
             yield event.plain_result("当前配置不允许模型通过自然对话主动推进阅读。")
@@ -556,6 +682,9 @@ class AutoReadPlugin(Star):
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
+            return
         umo = event.unified_msg_origin
         result = await self.autoread_service.get_status(umo, source="llm_tool")
         yield event.plain_result(result)
@@ -575,6 +704,9 @@ class AutoReadPlugin(Star):
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
+            return
         umo = event.unified_msg_origin
         result = await self.autoread_service.get_notes(umo=umo, limit=int(limit), source="llm_tool")
         yield event.plain_result(result)
@@ -590,6 +722,9 @@ class AutoReadPlugin(Star):
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
+            return
         result = await self.autoread_service.pause(event.unified_msg_origin)
         yield event.plain_result(result)
 
@@ -604,6 +739,9 @@ class AutoReadPlugin(Star):
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
+            return
         result = await self.autoread_service.resume(event.unified_msg_origin)
         yield event.plain_result(result)
 
@@ -617,6 +755,9 @@ class AutoReadPlugin(Star):
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
+            return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
             return
         result = await self.autoread_service.stop(event.unified_msg_origin)
         yield event.plain_result(result)
@@ -642,6 +783,9 @@ class AutoReadPlugin(Star):
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
+            return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
             return
         umo = event.unified_msg_origin
 
@@ -679,6 +823,9 @@ class AutoReadPlugin(Star):
         if not self.config_service.get("enable_llm_tools", True):
             yield event.plain_result("自然对话工具入口当前已关闭。")
             return
+        if not self._is_umo_enabled(event):
+            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
+            return
         umo = event.unified_msg_origin
 
         ci = int(chunk_index) if chunk_index >= 0 else None
@@ -691,6 +838,162 @@ class AutoReadPlugin(Star):
             percent=pct,
         )
         yield event.plain_result(result)
+
+    # ==================================================================
+    # P1-2：上传文件自动入库（静默）
+    # ==================================================================
+
+    @filter.platform_adapter_type(filter.PlatformAdapterType.ALL, priority=90)
+    async def _on_file_auto_import(self, event: AstrMessageEvent):
+        """上传文件自动入库。
+
+        只在 enabled_umos 命中 + auto_import_uploaded_books=true 时生效。
+        入库后不主动回复——这是书架更新事件，不是对话回复事件。
+        """
+        # 1. 配置检查
+        if not self.config_service.get("auto_import_uploaded_books", False):
+            return
+        if not self.config_service.get("enabled", True):
+            return
+
+        # 2. UMO 检查
+        if not self._is_umo_enabled(event):
+            logger.debug("[AutoRead Import] Skipped: UMO not enabled")
+            return
+
+        # 3. 提取文件组件
+        try:
+            messages = event.get_messages()
+        except Exception:
+            logger.debug("[AutoRead Import] Cannot get messages from event")
+            return
+        if not messages:
+            return
+
+        file_components = [
+            m for m in messages
+            if hasattr(m, "name") and hasattr(m, "get_file")
+        ]
+        if not file_components:
+            return
+
+        logger.debug(
+            f"[AutoRead Import] Found {len(file_components)} file component(s) "
+            f"in message"
+        )
+
+        # 4. 逐个处理文件
+        for comp in file_components:
+            await self._try_auto_import_file(comp, event)
+
+    async def _try_auto_import_file(self, comp, event: AstrMessageEvent):
+        """尝试导入单个文件组件。失败时静默记录日志。"""
+        filename = getattr(comp, "name", None) or "unknown"
+        suffix = Path(filename).suffix.lower()
+        allowed = [
+            e.lower() for e in
+            self.config_service.get("allowed_extensions", [".txt", ".md"])
+        ]
+
+        if suffix not in allowed:
+            logger.debug(f"[AutoRead Import] Skipped unsupported: {filename}")
+            return
+
+        # 下载/获取本地路径
+        try:
+            file_path = await comp.get_file()
+        except Exception as exc:
+            logger.warning(f"[AutoRead Import] Failed to get file {filename}: {exc}")
+            await self._record_bookshelf_event(
+                "auto_import_failed", book_id="", title=filename,
+                original_filename=filename,
+                event=event, error=str(exc),
+            )
+            return
+
+        if not file_path or not Path(file_path).exists():
+            logger.warning(f"[AutoRead Import] File not accessible: {filename}")
+            return
+
+        # 复制到 books/ 目录（BookLoader 要求文件在 books_dir 下）
+        import shutil
+        import uuid as _uuid
+        from datetime import datetime, timezone, timedelta
+
+        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
+        short = _uuid.uuid4().hex[:6]
+        stored_name = f"upload_{ts}_{short}{suffix}"
+        stored_path = self.data_dir / "books" / stored_name
+
+        try:
+            shutil.copy2(file_path, stored_path)
+        except Exception as exc:
+            logger.warning(f"[AutoRead Import] Copy failed {filename}: {exc}")
+            await self._record_bookshelf_event(
+                "auto_import_failed", book_id="", title=filename,
+                original_filename=filename,
+                event=event, error=str(exc),
+            )
+            return
+
+        # 复用现有导入流程
+        try:
+            autofix_stored = await self.autoread_service.import_book(stored_name)
+        except Exception as exc:
+            logger.warning(f"[AutoRead Import] Import failed {filename}: {exc}")
+            try:
+                stored_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            await self._record_bookshelf_event(
+                "auto_import_failed", book_id="", title=filename,
+                original_filename=filename,
+                event=event, error=str(exc),
+            )
+            return
+
+        # 提取 book_id
+        import re as _re
+        bid_match = _re.search(r"book_id:\s*(\S+)", autofix_stored)
+        book_id = bid_match.group(1) if bid_match else ""
+
+        logger.info(
+            f"[AutoRead Import] Auto-imported: {filename} → {stored_name}"
+            + (f" (book_id={book_id})" if book_id else "")
+        )
+
+        await self._record_bookshelf_event(
+            "auto_import_success", book_id=book_id,
+            title=Path(filename).stem[:120], original_filename=filename,
+            event=event, detail=autofix_stored,
+        )
+
+    async def _record_bookshelf_event(
+        self, event_type: str, *,
+        book_id: str = "", title: str = "",
+        original_filename: str = "",
+        event: AstrMessageEvent | None = None,
+        error: str = "", detail: str = "",
+    ):
+        """记录书架事件（用于后续自然语言查询）。"""
+        import uuid as _uuid
+        from datetime import datetime, timezone, timedelta
+
+        tz = timezone(timedelta(hours=8))
+        umo = self._resolve_umo(event) if event else ""
+        entry = {
+            "event_id": f"bs_{_uuid.uuid4().hex[:8]}",
+            "event_type": event_type,
+            "book_id": book_id,
+            "title": title,
+            "original_filename": original_filename,
+            "umo": umo or "",
+            "timestamp": datetime.now(tz).isoformat(),
+            "status": "error" if error else "ok",
+            "error": error,
+            "detail": detail[:500] if detail else "",
+        }
+        await self.state_store.append_bookshelf_event(entry)
 
     # ==================================================================
     # LLM Tool 监控钩子
