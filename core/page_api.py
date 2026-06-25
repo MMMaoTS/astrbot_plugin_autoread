@@ -359,6 +359,7 @@ class AutoReadWebUIAPI:
             return self._err(str(exc))
 
     async def _upload_book(self):
+        stored_filename = None
         try:
             files = await _upload_files()
             upload = files.get("file") if files else None
@@ -366,21 +367,38 @@ class AutoReadWebUIAPI:
                 return self._err("缺少上传文件 (字段名: file)")
             wrapped = _AsyncUploadFile(upload)
             result = await self.webui.upload_book_file(wrapped)
-            # 用原始文件名（去扩展名）作为书名，而非 stored_filename
-            original_title = Path(result.get("filename", "unknown")).stem[:120]
+            stored_filename = result["stored_filename"]
+
+            # 将用户上传的原始文件名传入导入流程，用于元数据推导
+            original_filename = result.get("filename", "unknown")
             import_result = await self.webui.import_uploaded_book(
-                stored_filename=result["stored_filename"],
-                title=original_title,
+                stored_filename=stored_filename,
+                original_filename=original_filename,
             )
             result.update(import_result)
             return self._ok(result)
         except ValueError as exc:
+            self._cleanup_uploaded_file(stored_filename)
             return self._err(str(exc))
         except PermissionError as exc:
+            self._cleanup_uploaded_file(stored_filename)
             return self._err(str(exc))
         except Exception as exc:
             logger.error(f"[AutoRead WebUI] upload error: {exc}")
+            self._cleanup_uploaded_file(stored_filename)
             return self._err(str(exc))
+
+    def _cleanup_uploaded_file(self, stored_filename: str | None) -> None:
+        """删除上传失败后残留的 books/ 文件。"""
+        if not stored_filename:
+            return
+        try:
+            file_path = self.webui.data_dir / "books" / stored_filename
+            if file_path.exists():
+                file_path.unlink()
+                logger.info(f"[AutoRead WebUI] Cleaned up uploaded file: {stored_filename}")
+        except Exception:
+            logger.warning(f"[AutoRead WebUI] Failed to clean up uploaded file: {stored_filename}")
 
     # ==================================================================
     # Sessions

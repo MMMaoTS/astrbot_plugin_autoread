@@ -20,9 +20,8 @@ from astrbot.api import logger
 
 def _fmt_tool_header(book_title: str, chunk_index: int, total_chunks: int) -> str:
     return (
-        f'[内部阅读结果, 请不要原样复述字段名, 用当前人格自然回应]\n'
-        f'书名: {book_title}\n'
-        f'当前进度: 第 {chunk_index + 1}/{total_chunks} 段\n'
+        f'刚读完《{book_title}》的一段内容。\n'
+        f'进度: 第 {chunk_index + 1}/{total_chunks} 段\n'
     )
 
 
@@ -56,25 +55,14 @@ def _fmt_tool_context(
     chapter: str,
     note: dict,
 ) -> str:
-    """给 LLM Tool 使用: 结构化信息 + 自然回应指令。"""
+    """给 LLM Tool 使用: 结构化阅读事实"""
     lines = [
         _fmt_tool_header(book_title, chunk_index, total_chunks),
         f'章节: {chapter or "未知"}',
         f'本段概括: {note.get("summary", "")}',
         f'注意到的细节: {note.get("detail", "") or "(无)"}',
         f'角色感受/疑问: {note.get("reflection", "") or "(无)"}',
-        f'建议自然回复素材: {note.get("share_message", "") or note.get("summary", "")}',
-        '',
-        (
-            '请根据以上内部信息，用当前人格自然回复用户。'
-            '不要输出「摘要」「细节」「反思」「书名」「进度」「章节」等字段名，'
-            '不要写成报告。'
-        ),
-        (
-            '如果本段信息不足以判断整本书，'
-            '请诚实体现「目前只读到很前面的部分」。'
-        ),
-        '只有工具返回的内容可以称为已经读到，不要假装读过后文。',
+        f'可参考的分享素材: {note.get("share_message", "") or note.get("summary", "")}',
     ]
     return "\n".join(lines)
 
@@ -85,7 +73,7 @@ def _fmt_share_message(
     total_chunks: int,
     note: dict,
 ) -> str:
-    """给后台主动分享使用: 优先使用 share_message。"""
+    """给后台主动分享使用: 优先使用 share_message."""
     share_msg = note.get("share_message", "") or note.get("summary", "")
     return (
         f'我刚刚继续读了一小段《{book_title}》。\n\n'
@@ -94,46 +82,71 @@ def _fmt_share_message(
     )
 
 
-def _fmt_notes_tool_context(notes: list[dict], limit: int, book_title: str = "") -> str:
-    """给 autoread_get_notes LLM Tool 使用的内部上下文。"""
+def _fmt_notes_tool_context(notes: list[dict], book_title: str = "") -> str:
+    """给 autoread_get_notes LLM Tool 使用的用户可见安全事实摘要。
+
+    返回内容即使被模型原样输出，也读起来像角色在回顾自己的笔记，
+    而非系统调试信息。不含时间戳、编号、内部字段。
+    """
     if not notes:
-        return (
-            '[内部阅读笔记查询结果]\n'
-            '当前没有已保存的阅读笔记。\n'
-            '请自然告知用户还没有笔记，不要编造。'
-        )
+        return "目前还没有保存的阅读笔记。"
 
-    header = f'[内部阅读笔记, 请不要原样复述字段名, 用当前人格自然回应]\n'
-    if book_title:
-        header += f'书籍: {book_title}\n'
-    header += f'最近 {len(notes)} 条笔记:\n'
+    book_ref = f"《{book_title}》" if book_title else "当前正在读的书"
 
-    body_lines = []
+    # ----- 单条笔记：自然段落 -----
+    if len(notes) == 1:
+        n = notes[0]
+        summary = n.get("summary", "").strip()
+        detail = n.get("detail", "").strip()
+        reflection = n.get("reflection", "").strip()
+
+        if not summary and not detail and not reflection:
+            return f"关于{book_ref}有一条阅读笔记，但内容为空。"
+
+        lines = [f"关于{book_ref}，有一条阅读笔记。"]
+        if summary:
+            lines.append(f"读到的内容概括：{summary}")
+        if detail:
+            lines.append(f"其中注意到的细节：{detail}")
+        if reflection:
+            lines.append(f"我当时的感受：{reflection}")
+        return "\n".join(lines)
+
+    # ----- 多条笔记：自然概览 + 逐条 -----
+    lines = [f"关于{book_ref}，目前保存了 {len(notes)} 条阅读笔记。"]
+    lines.append("")
+
     for i, n in enumerate(notes, 1):
-        ts = n.get("created_at", "")[:16]
-        body_lines.append(
-            f'--- 笔记{i} ---\n'
-            f'时间: {ts}\n'
-            f'阶段概括: {n.get("summary", "")[:120]}\n'
-            f'当时感受: {n.get("reflection", "")[:120]}\n'
-            f'分享建议: {n.get("share_message", "")[:120]}'
-        )
+        summary = n.get("summary", "").strip()
+        detail = n.get("detail", "").strip()
+        reflection = n.get("reflection", "").strip()
 
-    return (
-        header
-        + "\n".join(body_lines)
-        + "\n\n"
-        + (
-            '请根据以上内部信息，用当前人格自然回应用户。'
-            '不要输出「时间」「阶段概括」「感受」「分享建议」等字段名，'
-            '不要写成报告。'
-            '只提及工具实际返回的内容，不要编造未读到的情节。'
-        )
-    )
+        if not summary and not detail and not reflection:
+            continue
+
+        parts = []
+        if summary:
+            parts.append(f"这一段主要讲了：{summary}")
+        if detail:
+            parts.append(f"注意到的细节：{detail}")
+        if reflection:
+            parts.append(f"我的感受：{reflection}")
+
+        if parts:
+            if len(notes) <= 3:
+                lines.append(f"第{i}条笔记——" + "；".join(parts))
+            else:
+                lines.append(f"· " + "；".join(parts))
+
+    if len(lines) == 2:
+        # 所有笔记都是空的
+        return f"关于{book_ref}有 {len(notes)} 条阅读笔记，但内容均为空。"
+
+    return "\n".join(lines)
 
 
 def _fmt_status_tool_context(session: dict) -> str:
-    """给 autoread_get_status LLM Tool 使用的内部上下文。"""
+    """给 autoread_get_status LLM Tool 使用的阅读状态事实"""
     title = session.get("current_book_title", "?")
     idx = session.get("current_chunk_index", 0)
     total = session.get("total_chunks", 0)
@@ -146,18 +159,14 @@ def _fmt_status_tool_context(session: dict) -> str:
     elif paused:
         status_line = "阅读已暂停"
     else:
-        status_line = "正在持续阅读中"
+        status_line = "正在阅读中"
 
     return (
-        f'[内部阅读状态, 请不要原样复述字段名, 用当前人格自然回应]\n'
-        f'书名: {title}\n'
-        f'当前进度: 第 {idx}/{total} 段\n'
+        f'书名: 《{title}》\n'
+        f'进度: 第 {idx}/{total} 段\n'
         f'状态: {status_line}\n'
-        f'上次阅读时间: {last or "尚未阅读"}\n'
-        f'下次计划阅读时间: {nxt or "待定"}\n'
-        f'\n'
-        f'请根据以上信息，用当前人格自然告知用户当前阅读状态。'
-        f'不要输出「书名」「进度」「状态」「上次阅读时间」「下次阅读时间」等字段名。'
+        f'上次阅读: {last or "尚未阅读"}\n'
+        f'下次计划: {nxt or "待定"}'
     )
 
 
@@ -305,24 +314,55 @@ class AutoReadService:
     # list_books
     # ------------------------------------------------------------------
 
-    async def list_books(self) -> str:
-        """列出已导入书籍。"""
+    async def list_books(self, source: str = "command") -> str:
+        """列出已导入书籍。
+
+        source="llm_tool" 时返回给 LLM 的事实摘要（适合角色自然表达）。
+        source="command" 时返回结构化系统列表（/read list 兜底）。
+        """
         if disabled := self._enabled_message():
             return disabled
         books = await self.state_store.list_books()
+
+        from .book_metadata import normalize_book_meta, display_title, display_author
+
+        for b in books:
+            normalize_book_meta(b)
+
         if not books:
+            if source == "llm_tool":
+                return "书架里现在还没有能读的书。"
             return (
                 "暂无已导入的书籍。"
                 "请先将 txt/md 文件放入 plugin_data/astrbot_plugin_autoread/books/ "
                 "后使用 /read import <文件名> 导入。"
             )
 
-        # P1-3: 使用 format_book_list_item 优先展示 display_name/author
-        from .book_metadata import format_book_list_item, normalize_book_meta
+        if source == "llm_tool":
+            # P1-4.1: 用户可见安全事实——即使被 LLM 原样输出也不会出戏
+            book_count = len(books)
+            if book_count == 1:
+                b = books[0]
+                dname = display_title(b)
+                author = display_author(b)
+                if author:
+                    return f"书架里现在有《{dname}》，作者是{author}。"
+                return f"书架里现在有《{dname}》。"
+            # 多本书
+            items = []
+            for b in books:
+                dname = display_title(b)
+                author = display_author(b)
+                if author:
+                    items.append(f"《{dname}》（{author}）")
+                else:
+                    items.append(f"《{dname}》")
+            return f"书架里现在有 {book_count} 本书：" + "、".join(items) + "。"
 
+        # source="command": 系统列表（/read list 兜底）
+        from .book_metadata import format_book_list_item
         lines = ["已导入书籍:"]
         for b in books:
-            normalize_book_meta(b)  # 懒补全旧数据
             lines.append(format_book_list_item(b))
         return "\n".join(lines)
 
@@ -330,8 +370,12 @@ class AutoReadService:
     # choose_book
     # ------------------------------------------------------------------
 
-    async def choose_book(self, umo: str, preference: str = "") -> str:
-        """根据偏好选择书籍（仅返回建议，不自动开始阅读）。"""
+    async def choose_book(self, umo: str, preference: str = "", source: str = "command") -> str:
+        """根据偏好选择书籍（仅返回建议，不自动开始阅读）。
+
+        source="llm_tool" 时返回给 LLM 的内部推荐上下文。
+        source="command" 时返回结构化推荐信息（/read choose 兜底）。
+        """
         if disabled := self._enabled_message():
             return disabled
         books = await self.state_store.list_books()
@@ -340,6 +384,12 @@ class AutoReadService:
 
         if not preference:
             chosen = books[0]
+            if source == "llm_tool":
+                return (
+                    f"书架上目前推荐《{chosen['title']}》"
+                    f"（book_id: {chosen['book_id']}，共 {chosen.get('total_chunks', 0)} 段）。"
+                    f"如果用户想开始读，需要调用 autoread_start_book(book_id=\"{chosen['book_id']}\")。"
+                )
             return (
                 f"当前没有特别的偏好，建议阅读《{chosen['title']}》。\n"
                 f"book_id: {chosen['book_id']}\n"
@@ -361,6 +411,13 @@ class AutoReadService:
         scored.sort(key=lambda x: x[0], reverse=True)
         chosen = scored[0][1]
 
+        if source == "llm_tool":
+            return (
+                f"根据偏好「{preference}」，书架上最匹配的是《{chosen['title']}》"
+                f"（book_id: {chosen['book_id']}，共 {chosen.get('total_chunks', 0)} 段）。"
+                f"如果用户想开始读，需要调用 autoread_start_book(book_id=\"{chosen['book_id']}\")。"
+            )
+
         return (
             f"根据偏好「{preference}」，建议阅读《{chosen['title']}》。\n"
             f"book_id: {chosen['book_id']}\n"
@@ -376,12 +433,19 @@ class AutoReadService:
         umo: str,
         book_id: str,
         interval_minutes: int | float | None = None,
+        source: str = "command",
     ) -> str:
-        """开始持续阅读一本书。"""
+        """开始持续阅读一本书。
+
+        source="llm_tool" 时返回给 LLM 的内部上下文（强调"已就绪但尚未读取内容"）。
+        source="command" 时返回结构化确认信息（/read start 兜底）。
+        """
         if disabled := self._enabled_message():
             return disabled
         book = await self.state_store.get_book(book_id)
         if book is None:
+            if source == "llm_tool":
+                return f"没有找到对应的书，可能还没有导入。"
             return f"未找到书籍 {book_id}。请先导入或使用 /read list 查看可用书籍。"
 
         if interval_minutes is None:
@@ -400,6 +464,15 @@ class AutoReadService:
             auto_share_mode=auto_share_mode,
         )
 
+        if source == "llm_tool":
+            # LLM Tool 上下文：强调"已就绪但未读"，引导模型继续调用 read_next
+            return (
+                f"《{book['title']}》的阅读会话已就绪"
+                f"（共 {book['total_chunks']} 段，当前在第 0 段，尚未读取任何内容）。"
+                f"用户想要读内容的话，需要继续调用 autoread_read_next 获取第一段。"
+            )
+
+        # command 入口：结构化确认（/read start 兜底）
         return (
             f"已开始阅读《{book['title']}》。\n"
             f"总段数: {book['total_chunks']}\n"
@@ -435,8 +508,12 @@ class AutoReadService:
             return disabled
         session = await self.state_store.get_session(umo)
         if session is None:
+            if source == "llm_tool":
+                return "当前没有进行中的阅读会话，还没有开始读任何书。"
             return "当前会话尚未绑定。请先使用 /read bind 绑定。"
         if not session.get("current_book_id"):
+            if source == "llm_tool":
+                return "当前没有正在读的书。可以先搜索书架（autoread_search_books）找到想读的书，然后用 autoread_start_book 开始阅读。"
             return "当前没有正在阅读的书。请先使用 /read start <book_id> 开始阅读。"
 
         book_id = session["current_book_id"]
@@ -448,6 +525,11 @@ class AutoReadService:
         total_chunks = session.get("total_chunks", 0)
 
         if chunk_index >= total_chunks:
+            if source == "llm_tool":
+                return (
+                    f"《{book['title']}》已经全部读完啦"
+                    f"（进度: {chunk_index}/{total_chunks}）。"
+                )
             return (
                 f"已读完整本《{book['title']}》！\n"
                 f"进度: {chunk_index}/{total_chunks}\n"
@@ -457,10 +539,14 @@ class AutoReadService:
         # 加载当前 chunk
         chunks_path = self.data_dir / "chunks" / f"{book_id}.chunks.json"
         if not chunks_path.exists():
+            if source == "llm_tool":
+                return f"《{book['title']}》的文本数据好像丢失了，暂时没法继续读。"
             return f"切片文件丢失: {chunks_path}"
 
         chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
         if chunk_index >= len(chunks):
+            if source == "llm_tool":
+                return f"《{book['title']}》的阅读进度似乎出了问题，当前进度超出了书籍范围。"
             return f"chunk index {chunk_index} 超出范围 (total={len(chunks)})"
 
         chunk = chunks[chunk_index]
@@ -545,15 +631,12 @@ class AutoReadService:
             return disabled
         session = await self.state_store.get_session(umo)
         if session is None or not session.get("current_book_id"):
+            if source == "llm_tool":
+                return "目前还没有在读书。书架上的书都在，想读哪本或者想看看书架，告诉我就好。"
             msg = (
                 "当前没有进行中的阅读任务。\n"
                 "使用 /read bind 绑定会话，/read import 导入书籍，/read start <book_id> 开始阅读。"
             )
-            if source == "llm_tool":
-                return (
-                    f"[内部状态查询结果]\n{msg}\n"
-                    f"请自然告知用户当前没有进行中的阅读任务。"
-                )
             return msg
 
         if source == "llm_tool":
@@ -582,32 +665,63 @@ class AutoReadService:
     # get_notes
     # ------------------------------------------------------------------
 
-    async def get_notes(self, umo: str, limit: int = 5, source: str = "command") -> str:
-        """返回最近笔记。
+    async def get_notes(
+        self, umo: str, limit: int = 5, source: str = "command", book_id: str = "",
+    ) -> str:
+        """返回阅读笔记。
 
-        source="llm_tool" 时返回内部上下文（带自然回应指令）。
-        source="command" 时返回结构化调试信息。
+        source="llm_tool" 时返回用户可见安全的事实摘要。
+        source="command" 时返回结构化调试信息（/read notes 兜底）。
+
+        book_id 非空时查询指定书籍的笔记；为空时查询当前会话书的笔记。
         """
         if disabled := self._enabled_message():
             return disabled
-        notes = await self.state_store.get_recent_notes_for_session(umo, limit)
+
+        # 解析要查询的 book_id
+        effective_book_id = book_id.strip() if book_id else ""
+        book_title = ""
+
+        if effective_book_id:
+            # 指定书籍：获取元数据用于展示
+            book = await self.state_store.get_book(effective_book_id)
+            if book is None:
+                if source == "llm_tool":
+                    return f"没有找到对应的书籍。"
+                return f"书籍 {effective_book_id} 不存在。"
+            from .book_metadata import display_title
+            book_title = display_title(book)
+            notes, _ = await self.state_store.get_notes_by_book(
+                effective_book_id, page=1, page_size=limit,
+            )
+        else:
+            # 当前会话书
+            notes = await self.state_store.get_recent_notes_for_session(umo, limit)
+            if notes and source == "llm_tool":
+                session = await self.state_store.get_session(umo)
+                if session:
+                    book_title = session.get("current_book_title", "")
+                    # 尝试用 book metadata 取更好的 display_name
+                    bid = session.get("current_book_id", "")
+                    if bid:
+                        book = await self.state_store.get_book(bid)
+                        if book:
+                            from .book_metadata import display_title
+                            book_title = display_title(book)
+
+        # 无笔记
         if not notes:
-            msg = "暂无阅读笔记。"
             if source == "llm_tool":
-                return (
-                    f"[内部阅读笔记查询结果]\n{msg}\n"
-                    f"请自然告知用户还没有笔记，不要编造。"
-                )
-            return msg
+                if effective_book_id and book_title:
+                    return f"关于《{book_title}》，目前还没有保存的阅读笔记。"
+                return "目前还没有保存的阅读笔记。"
+            return "暂无阅读笔记。"
 
+        # llm_tool：用户可见安全事实摘要
         if source == "llm_tool":
-            session = await self.state_store.get_session(umo)
-            book_title = ""
-            if session:
-                book_title = session.get("current_book_title", "")
-            return _fmt_notes_tool_context(notes, limit, book_title)
+            return _fmt_notes_tool_context(notes, book_title)
 
-        # command 入口: 结构化
+        # command 入口：结构化（/read notes 兜底）
         lines = ["最近阅读笔记:"]
         for n in notes:
             ts = n.get("created_at", "?")

@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import re
-import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -259,12 +258,18 @@ class WebUIService:
     # ------------------------------------------------------------------
 
     async def upload_book_file(self, upload) -> dict:
-        """处理上传文件：校验、安全化文件名、落盘到 books/。"""
+        """处理上传文件：校验、保留原始文件名落盘到 books/。
+
+        文件名策略：
+        - 优先保留用户上传的原始可读文件名
+        - 仅对非法字符做安全化处理
+        - 重名时追加 __N 短后缀（如 小王子__2.txt），不丢失原始书名信息
+        """
         if not self.config_service.get("webui_upload_enabled", True):
             raise PermissionError("WebUI 上传功能已关闭")
 
         filename = upload.filename or "unknown.txt"
-        # 安全检查：只取 basename
+        # 安全检查：只取 basename，过滤路径穿越
         safe_name = Path(filename).name
         if not safe_name or safe_name.startswith("."):
             raise ValueError("无效的文件名")
@@ -282,15 +287,25 @@ class WebUIService:
         if len(content) > max_bytes:
             raise ValueError(f"文件超过大小限制 ({max_mb} MB)")
 
-        # 生成存储文件名
-        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
-        short = uuid.uuid4().hex[:6]
-        stored_name = f"upload_{ts}_{short}{suffix}"
-        stored_path = self.data_dir / "books" / stored_name
+        # 保留原始可读文件名；重名时追加短后缀
+        books_dir = self.data_dir / "books"
+        stored_name = safe_name
 
+        if (books_dir / stored_name).exists():
+            base = Path(safe_name).stem
+            counter = 2
+            while (books_dir / f"{base}__{counter}{suffix}").exists():
+                counter += 1
+            stored_name = f"{base}__{counter}{suffix}"
+
+        stored_path = books_dir / stored_name
         stored_path.write_bytes(content)
 
-        logger.info(f"[AutoRead WebUI] Uploaded file: {safe_name} -> {stored_name} ({len(content)} bytes)")
+        logger.info(
+            f"[AutoRead WebUI] Uploaded file: {safe_name}"
+            + (f" -> {stored_name}" if stored_name != safe_name else "")
+            + f" ({len(content)} bytes)"
+        )
 
         return {
             "filename": safe_name,
@@ -300,11 +315,15 @@ class WebUIService:
         }
 
     async def import_uploaded_book(
-        self, stored_filename: str, title: str | None = None
+        self, stored_filename: str, title: str | None = None,
+        original_filename: str = "",
     ) -> dict:
-        """导入已上传的文件（调用现有 book_loader + chunker）。
+        """导入已上传的文件：解析、分段、注册。
 
-        title 默认使用原始文件名（去扩展名）。stored_filename 仅用于内部存储。
+        stored_filename 是 books/ 下的实际文件名；
+        original_filename 是用户上传时的原始文件名，用于元数据推导。
+
+        导入失败时自动回滚本次产生的半成品（chunks、book 元数据）。
         """
         if not self.validate_filename(stored_filename):
             raise ValueError("无效的文件名")
@@ -313,28 +332,70 @@ class WebUIService:
         meta = imported.meta
         book_id = meta["book_id"]
 
-        # 如果外部传入了 title（原始文件名去扩展名），覆盖 book_loader 从 stored_filename 推导的值
-        if title:
-            title = title.strip()[:120]
+        try:
+            # 当实际存储名与原始文件名不同时（重名冲突），
+            # 从原始文件名重建元数据以保证 title/author/display_name 正确
+            if original_filename:
+                orig_safe = Path(original_filename).name
+                if orig_safe and orig_safe != stored_filename:
+                    from ..services.book_metadata import build_book_metadata
+                    orig_meta = build_book_metadata(orig_safe)
+                    meta["original_filename"] = orig_safe
+                    meta["file_stem"] = Path(orig_safe).stem
+                    meta["title"] = orig_meta["title"]
+                    meta["author"] = orig_meta["author"]
+                    meta["display_name"] = orig_meta["display_name"]
+                    meta["aliases"] = orig_meta["aliases"]
+                    meta["normalized_keys"] = orig_meta["normalized_keys"]
+                    logger.info(
+                        f"[AutoRead WebUI] Metadata rebuilt from original filename "
+                        f"'{orig_safe}' (stored as '{stored_filename}')"
+                    )
+
+            # 外部传入 title 时覆盖（WebUI 手动书名保留兼容）
             if title:
-                meta["title"] = title
-            elif "original_filename" in meta:
-                meta["title"] = Path(meta["original_filename"]).stem[:120]
+                title = title.strip()[:120]
+                if title:
+                    meta["title"] = title
 
-        chunks = self.chunker.split(imported.text)
-        meta["total_chunks"] = len(chunks)
+            chunks = self.chunker.split(imported.text)
+            meta["total_chunks"] = len(chunks)
 
-        chunks_path = self.data_dir / "chunks" / f"{book_id}.chunks.json"
-        await self.chunker.save_chunks(chunks_path, chunks)
+            chunks_path = self.data_dir / "chunks" / f"{book_id}.chunks.json"
+            await self.chunker.save_chunks(chunks_path, chunks)
 
-        await self.state_store.register_book(meta)
+            await self.state_store.register_book(meta)
 
-        return {
-            "book_id": book_id,
-            "title": meta["title"],
-            "total_chars": meta["total_chars"],
-            "total_chunks": meta["total_chunks"],
-        }
+            return {
+                "book_id": book_id,
+                "title": meta["title"],
+                "total_chars": meta["total_chars"],
+                "total_chunks": meta["total_chunks"],
+            }
+
+        except Exception:
+            # ----- 失败回滚：清理本次产生的半成品 -----
+            logger.warning(
+                f"[AutoRead WebUI] Import failed, rolling back book_id={book_id}"
+            )
+            # 1. 删除本次产生的 chunks 文件（无论是否标记为已保存，防止部分写入残留）
+            try:
+                chunks_path = self.data_dir / "chunks" / f"{book_id}.chunks.json"
+                if chunks_path.exists():
+                    chunks_path.unlink()
+                    logger.info(f"[AutoRead WebUI] Rollback: deleted {chunks_path}")
+            except Exception:
+                logger.warning("[AutoRead WebUI] Rollback: failed to delete chunks")
+            # 2. 从 state.json 中移除本次写入的 book 记录
+            try:
+                state = await self.state_store.load_state()
+                if book_id in state.get("books", {}):
+                    del state["books"][book_id]
+                    await self.state_store.save_state(state)
+                    logger.info(f"[AutoRead WebUI] Rollback: removed book {book_id} from state")
+            except Exception:
+                logger.warning("[AutoRead WebUI] Rollback: failed to remove book from state")
+            raise
 
     # ------------------------------------------------------------------
     # Sessions

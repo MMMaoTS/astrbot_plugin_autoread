@@ -46,6 +46,9 @@ class AutoReadPlugin(Star):
         super().__init__(context)
         self.config = config if config is not None else AstrBotConfig({})
 
+        # P1-4.3: 标记当前对话轮次是否有 autoread 工具参与
+        self._autoread_tool_invoked = False
+
         # 运行数据目录
         plugin_name = getattr(self, "name", None) or PLUGIN_NAME
         self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / plugin_name
@@ -180,8 +183,41 @@ class AutoReadPlugin(Star):
         return event_or_context
 
     # ==================================================================
-    # UMO 配置化：能力生效范围判断
+    # UMO 授权：管理/控制权限判断
     # ==================================================================
+    #
+    # enabled_umos 已从"自然读书能力启用范围"调整为"拥有管理/控制权限的 UMO 列表"。
+    #
+    # 授权 UMO（在 enabled_umos 列表中）：
+    #   - 可使用 /read 命令（管理/调试入口）
+    #   - 可通过自然语言执行管理操作（导入、删除、进度控制等）
+    #   - 可触发平台文件自动入库
+    #
+    # 未授权 UMO（不在 enabled_umos 列表中）：
+    #   - 可通过自然语言了解角色书架、阅读状态、笔记、读后感
+    #   - 可围绕已读内容进行普通讨论
+    #   - 不可执行管理/控制类操作
+    #
+    # 角色书架、阅读状态、阅读笔记属于角色自身能力状态，
+    # 不因 UMO 是否授权而"不可见"。
+
+    # 自然语言无权限消息（LLM Tool 返回）
+    # 原则：表达"本次未改动书签/进度/书架"，不说角色不能阅读、
+    # 不暴露 AstrBot/WebUI/权限/配置机制、不指导用户配置。
+    _MSG_UNAUTHORIZED_TOOL = (
+        "这次我没有改动书签或阅读进度。"
+        "书还在书架上，我们可以慢慢聊它。"
+    )
+
+    # /read 命令无权限消息（管理入口，可比自然语言路径更明确）
+    _MSG_UNAUTHORIZED_COMMAND = (
+        "当前会话没有 AutoRead 管理权限。\n"
+        "如需使用 /read 命令管理书架和阅读进度，"
+        "请在插件设置中将当前会话添加到 enabled_umos 列表。\n"
+        "你可以直接和我聊书架上的书，也可以问我读过什么、记过什么。"
+    )
+
+    # ---- 基础方法 ----
 
     def _resolve_umo(self, event) -> str | None:
         """从事件中解析 UMO（unified_msg_origin）。
@@ -194,14 +230,23 @@ class AutoReadPlugin(Star):
         return None
 
     def _is_umo_enabled(self, event) -> bool:
-        """判断当前事件 UMO 是否在 enabled_umos 配置列表中。
+        """判断当前事件 UMO 是否在 enabled_umos 列表中（兼容旧方法名）。
+
+        委托到 _is_umo_authorized。
+        """
+        return self._is_umo_authorized(event)
+
+    def _is_umo_authorized(self, event) -> bool:
+        """判断当前事件 UMO 是否拥有 AutoRead 管理/控制权限。
 
         规则：
-        - enabled_umos 为空 → False（默认不启用自然化能力）
+        - enabled_umos 为空 → False（默认不授权任何 UMO）
         - 无法解析 UMO → False
         - UMO 在列表中 → True
 
-        /read 兜底命令不受此限制。
+        注意：此方法仅用于管理/控制类操作。
+        书架查询、阅读状态、笔记查看等只读能力
+        不依赖此检查，对所有 UMO 默认可用。
         """
         enabled_umos = self.config_service.get("enabled_umos", [])
         if not enabled_umos:
@@ -209,26 +254,38 @@ class AutoReadPlugin(Star):
 
         umo = self._resolve_umo(event)
         if umo is None:
-            logger.debug("[AutoRead UMO] Cannot resolve UMO from event, natural ability disabled")
+            logger.debug("[AutoRead UMO] Cannot resolve UMO from event")
             return False
 
         if umo in enabled_umos:
             return True
 
-        logger.debug(f"[AutoRead UMO] UMO not in enabled_umos list")
+        logger.debug("[AutoRead UMO] UMO not in enabled_umos (management declined)")
         return False
 
     def _check_umo_or_skip(self, event) -> str | None:
-        """UMO 守卫：返回跳过消息（需 yield），或 None 表示通过。
+        """UMO 守卫（兼容旧方法）：返回跳过消息或 None 表示通过。
+
+        已委托到 _check_authorized_or_deny。
+        """
+        return self._check_authorized_or_deny(event)
+
+    def _check_authorized_or_deny(self, event) -> str | None:
+        """授权守卫：返回自然无权限消息（LLM Tool 上下文），或 None 表示通过。
 
         LLM Tool handler 中调用:
-            skip_msg = self._check_umo_or_skip(event)
-            if skip_msg is not None:
-                yield event.plain_result(skip_msg)
-                return
+            deny_msg = self._check_authorized_or_deny(event)
+            if deny_msg is not None:
+                return deny_msg
         """
-        if not self._is_umo_enabled(event):
-            return "自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。"
+        if not self._is_umo_authorized(event):
+            return self._MSG_UNAUTHORIZED_TOOL
+        return None
+
+    def _check_command_authorized(self, event) -> str | None:
+        """命令授权守卫：返回自然无权限消息，或 None 表示通过。"""
+        if not self._is_umo_authorized(event):
+            return self._MSG_UNAUTHORIZED_COMMAND
         return None
 
     async def initialize(self):
@@ -264,13 +321,17 @@ class AutoReadPlugin(Star):
     @read.command("bind")
     async def read_bind(self, event: AstrMessageEvent):
         """绑定当前会话，用于后续主动分享。"""
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         umo = event.unified_msg_origin
         result = await self.autoread_service.bind(umo)
         yield event.plain_result(result)
 
     @read.command("import")
     async def read_import(self, event: AstrMessageEvent, filename: str = ""):
-        """导入本地书籍。
+        """导入本地书籍。需要管理权限。
 
         Args:
             filename(string): 要导入的文件名（文件须位于 plugin_data/astrbot_plugin_autoread/books/ 下）
@@ -278,6 +339,10 @@ class AutoReadPlugin(Star):
         Examples:
             /read import mybook.txt
         """
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         if not filename:
             yield event.plain_result(
                 "请指定文件名。\n"
@@ -290,24 +355,32 @@ class AutoReadPlugin(Star):
 
     @read.command("list")
     async def read_list(self, event: AstrMessageEvent):
-        """列出已导入的书籍。"""
+        """列出已导入的书籍。需要管理权限。"""
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         result = await self.autoread_service.list_books()
         yield event.plain_result(result)
 
     @read.command("choose")
     async def read_choose(self, event: AstrMessageEvent, preference: str = ""):
-        """根据偏好选择书籍。
+        """根据偏好选择书籍。需要管理权限。
 
         Args:
             preference(string): 阅读偏好（可选）
         """
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         umo = event.unified_msg_origin
         result = await self.autoread_service.choose_book(umo=umo, preference=preference)
         yield event.plain_result(result)
 
     @read.command("start")
     async def read_start(self, event: AstrMessageEvent, book_id: str = ""):
-        """开始持续阅读一本书。
+        """开始持续阅读一本书。需要管理权限。
 
         Args:
             book_id(string): 要阅读的书籍 ID
@@ -315,6 +388,10 @@ class AutoReadPlugin(Star):
         Examples:
             /read start book_20260623_001
         """
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         if not book_id:
             yield event.plain_result(
                 "请指定 book_id。\n"
@@ -328,7 +405,11 @@ class AutoReadPlugin(Star):
 
     @read.command("step")
     async def read_step(self, event: AstrMessageEvent):
-        """阅读下一段文本并生成笔记。"""
+        """阅读下一段文本并生成笔记。需要管理权限。"""
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         umo = event.unified_msg_origin
         result = await self.autoread_service.read_next_chunk(
             umo=umo,
@@ -340,11 +421,15 @@ class AutoReadPlugin(Star):
 
     @read.command("status")
     async def read_status(self, event: AstrMessageEvent):
-        """查看当前阅读进度（B-first 分层验证切片）。
+        """查看当前阅读进度（B-first 分层验证切片）。需要管理权限。
 
         走新骨架: ReadActionResult → OutputPolicy → RoleResponseComposer。
         管理类/禁用/无任务场景保持插件直出。
         """
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         umo = event.unified_msg_origin
 
         # 1. 获取原始业务数据
@@ -397,11 +482,15 @@ class AutoReadPlugin(Star):
 
     @read.command("notes")
     async def read_notes(self, event: AstrMessageEvent, limit: str = "5"):
-        """查看最近阅读笔记。
+        """查看最近阅读笔记。需要管理权限。
 
         Args:
             limit(string): 返回条数，默认 5
         """
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         try:
             n = int(limit)
         except ValueError:
@@ -412,19 +501,31 @@ class AutoReadPlugin(Star):
 
     @read.command("pause")
     async def read_pause(self, event: AstrMessageEvent):
-        """暂停后台阅读。"""
+        """暂停后台阅读。需要管理权限。"""
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         result = await self.autoread_service.pause(event.unified_msg_origin)
         yield event.plain_result(result)
 
     @read.command("resume")
     async def read_resume(self, event: AstrMessageEvent):
-        """恢复后台阅读。"""
+        """恢复后台阅读。需要管理权限。"""
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         result = await self.autoread_service.resume(event.unified_msg_origin)
         yield event.plain_result(result)
 
     @read.command("stop")
     async def read_stop(self, event: AstrMessageEvent):
-        """停止当前阅读任务。"""
+        """停止当前阅读任务。需要管理权限。"""
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         result = await self.autoread_service.stop(event.unified_msg_origin)
         yield event.plain_result(result)
 
@@ -438,6 +539,10 @@ class AutoReadPlugin(Star):
           /read reread --book <book_id> --from-index 10 --to-index 15
           /read reread --help                  查看帮助
         """
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         umo = event.unified_msg_origin
         parsed = self._parse_reread_args(args)
 
@@ -475,13 +580,17 @@ class AutoReadPlugin(Star):
 
     @read.command("progress")
     async def read_progress(self, event: AstrMessageEvent, args: str = ""):
-        """查看或设置阅读进度。
+        """查看或设置阅读进度。需要管理权限。
 
         用法:
           /read progress                      查看当前进度
           /read progress set --book <book_id> --percent 35%
           /read progress set --book <book_id> --index 10
         """
+        deny_msg = self._check_command_authorized(event)
+        if deny_msg is not None:
+            yield event.plain_result(deny_msg)
+            return
         umo = event.unified_msg_origin
         args = (args or "").strip()
 
@@ -579,86 +688,157 @@ class AutoReadPlugin(Star):
     # ==================================================================
 
     @filter.llm_tool(name="autoread_list_books")
-    async def autoread_list_books(self, _event_or_ctx):
-        """列出当前可供持续阅读的书籍。
+    async def autoread_list_books(self, _event_or_ctx, dummy: str = ""):
+        """列出当前可供持续阅读的书籍。所有会话均可查询书架。
 
-        Args:
-            dummy(string): 无需填写，保留为空字符串。
+        无需参数，直接调用即可。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
+            return "自然对话工具入口当前已关闭。"
+        result = await self.autoread_service.list_books(source="llm_tool")
+        return str(result)
+
+    @filter.llm_tool(name="autoread_search_books")
+    async def autoread_search_books(self, _event_or_ctx, query: str = ""):
+        """根据书名、作者名或部分关键词搜索书架上的书籍。所有会话均可使用。
+
+        适用场景：用户说"继续读小王子""小王子读到哪里了""三体""刘慈欣的书"等提到具体书名/作者时，
+        先用本工具搜索匹配的 book_id，再用其他工具（autoread_start_book / autoread_read_next / autoread_get_status）操作。
+
+        注意：返回结果中的 book_id 是内部标识符，不要在回复中向用户展示 book_id。
+        向用户提及书籍时，用书名（如《小王子》）即可。
+
+        Args:
+            query(string): 搜索词，例如"小王子""三体""圣埃克苏佩里"。
+        """
+        event = self._get_event(_event_or_ctx)
+        if not self.config_service.get("enable_llm_tools", True):
+            return "自然对话工具入口当前已关闭。"
+        if not query or not query.strip():
+            return "没有提供搜索词，不确定你想找哪本书。"
+
+        books = await self.state_store.list_books()
+        if not books:
+            return "书架是空的，没有书可以搜索。"
             return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
-        result = await self.autoread_service.list_books()
-        yield event.plain_result(result)
+
+        from .services.book_metadata import search_books, normalize_book_meta
+        for b in books:
+            normalize_book_meta(b)
+
+        results = search_books(query, books)
+        if not results:
+            return f"没有找到和「{query}」匹配的书。"
+
+        if len(results) == 1:
+            r = results[0]
+            author_str = f"，作者是{r.author}" if r.author else ""
+            return (
+                f"找到了《{r.display_name}》{author_str}。"
+                f"\n[内部使用] book_id: {r.book_id}"
+            )
+
+        # 多候选：列出书名和对应 book_id，供后续精确选择
+        items = []
+        for r in results[:5]:
+            author_str = f"（{r.author}）" if r.author else ""
+            items.append(f"《{r.display_name}》{author_str} [book_id: {r.book_id}]")
+        return (
+            f"找到了 {len(results)} 本和「{query}」相关的书：\n" + "\n".join(f"  · {item}" for item in items)
+        )
 
     @filter.llm_tool(name="autoread_choose_book")
     async def autoread_choose_book(self, _event_or_ctx, preference: str = ""):
-        """根据当前角色兴趣和用户给出的偏好，从已导入书籍中选择一本想读的书。该工具只选择书，不会自动开始阅读。
+        """根据当前角色兴趣和用户给出的偏好，从已导入书籍中推荐一本。该工具只推荐书名，不会自动开始阅读，也不会改动书签或进度。
+        需要管理权限。如果工具返回表示本次没有改动书签或进度，不要继续调用控制类 AutoRead 工具，以角色口吻自然延续对话即可。
+
+        如果用户只是说"你推荐一本""你挑一本"，本工具可以独立使用。
+        如果用户明确说"读读看""开始读"，则需要在 choose_book 之后继续调用 autoread_start_book → autoread_read_next。
 
         Args:
             preference(string): 用户或角色表达的阅读偏好，例如"童话""科幻""哲学""轻松一点""你自己感兴趣的"。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         umo = event.unified_msg_origin
-        result = await self.autoread_service.choose_book(umo=umo, preference=preference)
-        yield event.plain_result(result)
+        result = await self.autoread_service.choose_book(umo=umo, preference=preference, source="llm_tool")
+        return str(result)
 
     @filter.llm_tool(name="autoread_start_book")
     async def autoread_start_book(
         self, _event_or_ctx, book_id: str, interval_minutes: float = 1440
     ):
-        """开始持续阅读一本已导入的书，并绑定当前会话用于后续主动分享。
+        """开始持续阅读一本已导入的书（仅创建阅读会话，不读取任何书籍内容）。需要管理权限。
+
+        适用场景：用户说"读一下小王子""开始读小王子""我们读三体吧"等。
+        如果用户提到书名而不是 book_id，请先调用 autoread_search_books 查找 book_id。
+
+        **重要**：本工具只创建阅读会话并设置进度指针为第 0 段，**不返回任何书籍内容**。
+        调用成功后，你实际上还没有读到任何文字。要继续阅读，必须接着调用 autoread_read_next
+        获取第一段的内容。停在 start_book 就回复用户等于什么都没读。
+
+        典型完整流程（授权 UMO 中用户说"读读看小王子"）：
+        autoread_search_books("小王子") → autoread_start_book(book_id) → autoread_read_next()
+
+        如果工具返回表示本次没有改动书签或进度，不要继续调用 read_next/set_progress 等控制类工具、
+        不要说角色不能阅读、不要指导用户配置 AstrBot/WebUI/权限；以角色口吻自然延续对话即可，例如聊聊书或感受。
 
         Args:
-            book_id(string): 要开始阅读的书籍 ID，必须来自 autoread_list_books 或 autoread_choose_book 的结果。
-            interval_minutes(number): 阅读间隔，单位分钟。默认 1440 分钟，即每天一次。
+            book_id(string): 要开始阅读的书籍 ID。请通过 autoread_search_books（按书名/作者搜索）或 autoread_list_books（查看书架）获取。不要在回复中向用户展示 book_id。
+            interval_minutes(number): 阅读间隔，单位分钟。默认 1440 分钟，即每天一次。一般情况下不需要填写。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         umo = event.unified_msg_origin
         result = await self.autoread_service.start_book(
             umo=umo,
             book_id=book_id,
             interval_minutes=interval_minutes,
+            source="llm_tool",
         )
-        yield event.plain_result(result)
+        return str(result)
 
     @filter.llm_tool(name="autoread_read_next")
     async def autoread_read_next(self, _event_or_ctx, reason: str = ""):
-        """读取当前书的下一段文本，生成阶段性读书笔记，并推进阅读进度。
+        """继续读当前正在读的书的下一段。需要管理权限。
+
+        适用场景：用户说"继续读吧""继续""接着读""再读一段"等。
+
+        调用本工具前，必须先确认当前有一本正在读的书（即已经通过 autoread_start_book 设置了阅读会话）。
+        如果当前没有正在读的书：
+        - 用户提到了具体书名 → 先 autoread_search_books 找书，再 autoread_start_book 开始，
+          然后调用本工具读第一段。完整链路：search_books → start_book → read_next。
+        - 用户没提具体书名 → 先 autoread_list_books 查看书架上有哪些书，自然询问用户想读哪本，
+          不要自己随便选一本开始。
+        - 不要在确认有 active book 之前直接调用本工具。
+
+        如果工具返回表示本次没有改动书签或进度，不要继续调用其他控制类工具、
+        不要说角色不能阅读、不要指导用户配置 AstrBot/WebUI/权限；以角色口吻自然延续对话，可聊书或聊感受。
 
         注意：工具返回的是内部结构化阅读结果。你必须把结果转化为符合当前人格的自然表达，
         不要原样输出"摘要/细节/反思/书名/进度/章节/分享素材"等字段名，不要写成报告。
         只有工具返回的内容可以称为已经读到，不要假装读过后文或评价整本书。
 
         Args:
-            reason(string): 本次主动阅读的原因，例如"用户问我最近读到哪里了""我想继续读一点""定时任务触发"。
+            reason(string): 本次主动阅读的原因，例如"用户让我继续读""我想接着读一点""定时任务触发"。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         if not self.config_service.get("allow_llm_read_next", True):
-            yield event.plain_result("当前配置不允许模型通过自然对话主动推进阅读。")
-            return
+            return "当前配置不允许模型通过自然对话主动推进阅读。"
         umo = event.unified_msg_origin
         result = await self.autoread_service.read_next_chunk(
             umo=umo,
@@ -666,11 +846,11 @@ class AutoReadPlugin(Star):
             send_message=False,
             source="llm_tool",
         )
-        yield event.plain_result(result)
+        return str(result)
 
     @filter.llm_tool(name="autoread_get_status")
     async def autoread_get_status(self, _event_or_ctx):
-        """查看当前会话的持续阅读状态。
+        """查看当前的持续阅读状态。所有会话均可查询。
 
         注意：工具返回的是内部状态数据。你必须把结果转化为自然表达，
         不要原样输出"书名/进度/状态/上次阅读时间/下次阅读时间"等字段名。
@@ -680,87 +860,86 @@ class AutoReadPlugin(Star):
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
         umo = event.unified_msg_origin
         result = await self.autoread_service.get_status(umo, source="llm_tool")
-        yield event.plain_result(result)
+        return str(result)
 
     @filter.llm_tool(name="autoread_get_notes")
-    async def autoread_get_notes(self, _event_or_ctx, limit: float = 5):
-        """查看当前书最近的持续阅读笔记。
+    async def autoread_get_notes(self, _event_or_ctx, limit: float = 5, book_id: str = ""):
+        """查看阅读笔记。所有会话均可查询。
 
-        注意：工具返回的是内部结构化笔记数据。你必须把结果转化为符合当前人格的自然表达，
-        不要原样输出"时间/阶段概括/感受/分享建议"等字段名，不要写成报告。
+        适用场景：用户说"你有什么阅读笔记？""你怎么看刚才那段？""你之前读小王子时记了什么？"
+        如果用户提到具体书名，请先调用 autoread_search_books 查找 book_id，再传入本工具。
+        不传 book_id 时返回当前正在读的书的笔记。
+
+        注意：工具返回的是阅读笔记的事实摘要。你必须把结果转化为符合当前人格的自然表达，
+        不要原样输出"读到的内容概括/注意到的细节/我的感受"等字段名，不要写成报告。
         只提及工具实际返回的内容，不要编造未读到的情节。
 
         Args:
             limit(number): 返回最近多少条笔记，默认 5 条。
+            book_id(string): 书籍 ID（可选）。不传则查询当前正在读的书。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
         umo = event.unified_msg_origin
-        result = await self.autoread_service.get_notes(umo=umo, limit=int(limit), source="llm_tool")
-        yield event.plain_result(result)
+        result = await self.autoread_service.get_notes(
+            umo=umo, limit=int(limit), source="llm_tool", book_id=book_id.strip(),
+        )
+        return str(result)
 
     @filter.llm_tool(name="autoread_pause")
     async def autoread_pause(self, _event_or_ctx):
-        """暂停当前会话的后台持续阅读。
+        """暂停当前会话的后台持续阅读。需要管理权限。
+        如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         result = await self.autoread_service.pause(event.unified_msg_origin)
-        yield event.plain_result(result)
+        return str(result)
 
     @filter.llm_tool(name="autoread_resume")
     async def autoread_resume(self, _event_or_ctx):
-        """恢复当前会话的后台持续阅读。
+        """恢复当前会话的后台持续阅读。需要管理权限。
+        如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         result = await self.autoread_service.resume(event.unified_msg_origin)
-        yield event.plain_result(result)
+        return str(result)
 
     @filter.llm_tool(name="autoread_stop")
     async def autoread_stop(self, _event_or_ctx):
-        """停止当前阅读任务，但保留历史笔记。
+        """停止当前阅读任务，但保留历史笔记。需要管理权限。
+        如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 
         Args:
             dummy(string): 无需填写，保留为空字符串。
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         result = await self.autoread_service.stop(event.unified_msg_origin)
-        yield event.plain_result(result)
+        return str(result)
 
     @filter.llm_tool(name="autoread_reread")
     async def autoread_reread(
@@ -769,6 +948,7 @@ class AutoReadPlugin(Star):
         start_index: float = -1, end_index: float = -1,
     ):
         """重新阅读指定范围。不推进主进度，不删除旧笔记。与继续阅读（autoread_read_next）不同。
+        需要管理权限。如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 
         适用场景：用户说"重新读一下第三章""这段重新读一遍""这条笔记对应的原文再读一次"。
 
@@ -782,11 +962,10 @@ class AutoReadPlugin(Star):
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         umo = event.unified_msg_origin
 
         si = int(start_index) if start_index >= 0 else None
@@ -804,13 +983,14 @@ class AutoReadPlugin(Star):
             end_percent=ep,
             source="llm_tool",
         )
-        yield event.plain_result(result)
+        return str(result)
 
     @filter.llm_tool(name="autoread_set_progress")
     async def autoread_set_progress(
         self, _event_or_ctx, book_id: str = "", percent: float = 0, chunk_index: float = -1
     ):
         """设置当前阅读进度。不读取内容，不生成笔记。仅修改进度指针。
+        需要管理权限。如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 
         适用场景：用户说"把进度调到35%""从第10段开始"。
 
@@ -821,11 +1001,10 @@ class AutoReadPlugin(Star):
         """
         event = self._get_event(_event_or_ctx)
         if not self.config_service.get("enable_llm_tools", True):
-            yield event.plain_result("自然对话工具入口当前已关闭。")
-            return
-        if not self._is_umo_enabled(event):
-            yield event.plain_result("自然读书能力未对当前会话启用。请在插件设置中添加当前会话到 enabled_umos 列表。")
-            return
+            return "自然对话工具入口当前已关闭。"
+        deny_msg = self._check_authorized_or_deny(event)
+        if deny_msg is not None:
+            return deny_msg
         umo = event.unified_msg_origin
 
         ci = int(chunk_index) if chunk_index >= 0 else None
@@ -837,7 +1016,7 @@ class AutoReadPlugin(Star):
             chunk_index=ci,
             percent=pct,
         )
-        yield event.plain_result(result)
+        return str(result)
 
     # ==================================================================
     # P1-2：上传文件自动入库（静默）
@@ -887,7 +1066,15 @@ class AutoReadPlugin(Star):
             await self._try_auto_import_file(comp, event)
 
     async def _try_auto_import_file(self, comp, event: AstrMessageEvent):
-        """尝试导入单个文件组件。失败时静默记录日志。"""
+        """尝试导入单个文件组件。
+
+        文件名策略（与 WebUI 上传统一）：
+        - 优先保留平台上传文件的原始可读文件名
+        - 重名时追加 __N 短后缀
+        - 不再使用 upload_xxx / 随机 ID 作为正式书籍文件名
+
+        失败时静默记录日志并回滚本次产生的半成品。
+        """
         filename = getattr(comp, "name", None) or "unknown"
         suffix = Path(filename).suffix.lower()
         allowed = [
@@ -915,16 +1102,29 @@ class AutoReadPlugin(Star):
             logger.warning(f"[AutoRead Import] File not accessible: {filename}")
             return
 
-        # 复制到 books/ 目录（BookLoader 要求文件在 books_dir 下）
+        # ----- 确定存储文件名：保留原始可读文件名 -----
         import shutil
-        import uuid as _uuid
-        from datetime import datetime, timezone, timedelta
 
-        ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
-        short = _uuid.uuid4().hex[:6]
-        stored_name = f"upload_{ts}_{short}{suffix}"
-        stored_path = self.data_dir / "books" / stored_name
+        safe_name = Path(filename).name
+        if not safe_name or safe_name.startswith("."):
+            # 极端情况：文件名只有扩展名或以 . 开头，使用安全回退名
+            import uuid as _uuid
+            safe_name = f"file_{_uuid.uuid4().hex[:8]}{suffix}"
 
+        books_dir = self.data_dir / "books"
+        stored_name = safe_name
+
+        # 重名冲突：追加 __N 短后缀
+        if (books_dir / stored_name).exists():
+            base = Path(safe_name).stem
+            counter = 2
+            while (books_dir / f"{base}__{counter}{suffix}").exists():
+                counter += 1
+            stored_name = f"{base}__{counter}{suffix}"
+
+        stored_path = books_dir / stored_name
+
+        # 复制到 books/ 目录
         try:
             shutil.copy2(file_path, stored_path)
         except Exception as exc:
@@ -936,15 +1136,18 @@ class AutoReadPlugin(Star):
             )
             return
 
-        # 复用现有导入流程
+        # 复用现有导入流程（import_book → import_local_book → chunk → register）
         try:
-            autofix_stored = await self.autoread_service.import_book(stored_name)
+            result = await self.autoread_service.import_book(stored_name)
         except Exception as exc:
             logger.warning(f"[AutoRead Import] Import failed {filename}: {exc}")
+            # 回滚：删除本次保存的 books 文件
             try:
                 stored_path.unlink(missing_ok=True)
             except Exception:
                 pass
+            # 回滚：清理 state.json 中可能已写入的 book 记录
+            await self._cleanup_book_by_source_path(stored_name)
             await self._record_bookshelf_event(
                 "auto_import_failed", book_id="", title=filename,
                 original_filename=filename,
@@ -952,9 +1155,15 @@ class AutoReadPlugin(Star):
             )
             return
 
-        # 提取 book_id
+        # 重名冲突时：从原始文件名重建元数据，避免 title/author 被 __N 后缀污染
+        if stored_name != safe_name:
+            await self._fix_book_metadata_from_original_filename(
+                stored_name, safe_name,
+            )
+
+        # 提取 book_id（import_book 返回的格式化文本中包含）
         import re as _re
-        bid_match = _re.search(r"book_id:\s*(\S+)", autofix_stored)
+        bid_match = _re.search(r"book_id:\s*(\S+)", result)
         book_id = bid_match.group(1) if bid_match else ""
 
         logger.info(
@@ -965,8 +1174,74 @@ class AutoReadPlugin(Star):
         await self._record_bookshelf_event(
             "auto_import_success", book_id=book_id,
             title=Path(filename).stem[:120], original_filename=filename,
-            event=event, detail=autofix_stored,
+            event=event, detail=result,
         )
+
+    # ------------------------------------------------------------------
+    # 平台自动入库辅助：回滚与元数据修正
+    # ------------------------------------------------------------------
+
+    async def _cleanup_book_by_source_path(self, stored_name: str) -> None:
+        """从 state.json 中移除 source_path 指向本次残留文件的 book 记录。
+
+        用于导入失败后的回滚。只删本次产生的记录，不误删历史数据。
+        """
+        try:
+            state = await self.state_store.load_state()
+            source_path = f"books/{stored_name}"
+            to_remove = None
+            for bid, book in state.get("books", {}).items():
+                if book.get("source_path") == source_path:
+                    to_remove = bid
+                    break
+            if to_remove:
+                del state["books"][to_remove]
+                await self.state_store.save_state(state)
+                logger.info(
+                    f"[AutoRead Import] Rollback: removed book {to_remove} "
+                    f"from state (source_path={source_path})"
+                )
+        except Exception:
+            logger.warning(
+                "[AutoRead Import] Rollback: failed to clean state for "
+                f"stored_name={stored_name}"
+            )
+
+    async def _fix_book_metadata_from_original_filename(
+        self, stored_name: str, original_name: str,
+    ) -> None:
+        """当存储名与原始文件名不同时（重名冲突），从原始文件名重建元数据。
+
+        确保 title/author/display_name/aliases/normalized_keys
+        不受 __N 冲突后缀影响。
+        """
+        try:
+            from .services.book_metadata import build_book_metadata
+
+            orig_meta = build_book_metadata(original_name)
+            state = await self.state_store.load_state()
+            source_path = f"books/{stored_name}"
+
+            for bid, book in state.get("books", {}).items():
+                if book.get("source_path") == source_path:
+                    book["original_filename"] = original_name
+                    book["file_stem"] = Path(original_name).stem
+                    book["title"] = orig_meta["title"]
+                    book["author"] = orig_meta["author"]
+                    book["display_name"] = orig_meta["display_name"]
+                    book["aliases"] = orig_meta["aliases"]
+                    book["normalized_keys"] = orig_meta["normalized_keys"]
+                    await self.state_store.save_state(state)
+                    logger.info(
+                        f"[AutoRead Import] Fixed metadata for {bid}: "
+                        f"'{stored_name}' → original '{original_name}'"
+                    )
+                    break
+        except Exception:
+            logger.warning(
+                "[AutoRead Import] Failed to fix metadata for conflict "
+                f"resolution: stored={stored_name} original={original_name}"
+            )
 
     async def _record_bookshelf_event(
         self, event_type: str, *,
@@ -996,7 +1271,7 @@ class AutoReadPlugin(Star):
         await self.state_store.append_bookshelf_event(entry)
 
     # ==================================================================
-    # LLM Tool 监控钩子
+    # LLM Tool 监控钩子 + 平台消息流水补写
     # ==================================================================
 
     @filter.on_using_llm_tool()
@@ -1006,10 +1281,12 @@ class AutoReadPlugin(Star):
         tool,
         tool_args: dict | None,
     ):
-        """记录 LLM Tool 被调用。"""
+        """记录 LLM Tool 被调用，并标记本轮有 autoread 工具参与。"""
         tool_name = getattr(tool, "name", str(tool))
         if tool_name and tool_name.startswith("autoread_"):
             logger.info(f"[AutoRead] LLM tool called: {tool_name}, args={tool_args}")
+            # P1-4.3: 标记本轮有 autoread 工具调用，用于 after_message_sent 补写平台流水
+            self._autoread_tool_invoked = True
 
     @filter.on_llm_tool_respond()
     async def on_llm_tool_respond(
@@ -1023,3 +1300,48 @@ class AutoReadPlugin(Star):
         tool_name = getattr(tool, "name", str(tool))
         if tool_name and tool_name.startswith("autoread_"):
             logger.info(f"[AutoRead] LLM tool responded: {tool_name}")
+
+    @filter.after_message_sent(priority=50)
+    async def _after_autoread_message_sent(self, event: AstrMessageEvent):
+        """在 autoread 工具参与的对话轮次中，补写最终回复到平台消息流水。
+
+        只写最终 assistant 回复，不写 Tool result，不写 /read 命令。
+        """
+        if not getattr(self, "_autoread_tool_invoked", False):
+            return
+        self._autoread_tool_invoked = False
+
+        try:
+            result = event.get_result()
+            if not result or not result.chain:
+                return
+
+            # 提取最终回复文本
+            from astrbot.core.message.components import Plain
+            text_parts = []
+            for comp in result.chain:
+                if isinstance(comp, Plain):
+                    text_parts.append(comp.text)
+            final_text = "".join(text_parts).strip()
+            if not final_text:
+                return
+
+            # 写入平台消息流水
+            history_mgr = getattr(self.context, "message_history_manager", None)
+            if not history_mgr:
+                return
+
+            umo = event.unified_msg_origin
+            await history_mgr.insert(
+                platform_id=event.get_platform_name(),
+                user_id=event.get_sender_id(),
+                content={"type": "bot", "message": final_text},
+                sender_id="bot",
+                sender_name="bot",
+            )
+            logger.debug(
+                f"[AutoRead] Platform history persisted: "
+                f"umo={umo} len={len(final_text)}"
+            )
+        except Exception:
+            logger.debug("[AutoRead] Platform history persist skipped (non-critical)")

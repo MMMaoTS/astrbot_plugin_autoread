@@ -86,7 +86,7 @@ class BookLoader:
             "normalized_keys": metadata["normalized_keys"],
         }
 
-        logger.info(f"[AutoRead] Imported book: {title} (id={book_id}, chars={len(text)})")
+        logger.info(f"[AutoRead] Imported book: {meta['title']} (id={book_id}, chars={len(text)})")
         return ImportedBook(meta=meta, text=text)
 
     # ------------------------------------------------------------------
