@@ -247,7 +247,7 @@ tr:hover td { background: rgba(0,0,0,0.02); }
       </div>
       <div class="table-wrap">
         <table><thead><tr>
-          <th>时间</th><th>章节</th><th>段</th><th>类型</th><th>重要性</th><th>关键词</th><th>摘要</th><th>操作</th>
+          <th>时间</th><th>章节</th><th>段</th><th>类型</th><th>重要性</th><th>关键词 / 标签</th><th>摘要</th><th>操作</th>
         </tr></thead><tbody id="notes-tbody"></tbody></table>
       </div>
       <div class="pagination" id="notes-pagination"></div>
@@ -931,7 +931,12 @@ function renderNotesTable(items) {
   var tbody = document.getElementById("notes-tbody");
   if (!items.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无阅读笔记。</td></tr>'; return; }
   tbody.innerHTML = items.map(function(n) {
-    var kwDisplay = (n.keywords || []).slice(0, 4).join(", ") || (n.tags || []).slice(0, 4).join(", ") || "-";
+    var kws = (n.keywords || []).slice(0, 3);
+    var tgs = (n.tags || []).slice(0, 3);
+    var parts = [];
+    if (kws.length) parts.push(kws.join(", "));
+    if (tgs.length) parts.push("[" + tgs.join(", ") + "]");
+    var kwDisplay = parts.length ? parts.join(" ") : "-";
     return '<tr><td>' + formatTime(n.created_at) + '</td>' +
       '<td>' + escapeHtml(n.chapter_title || n.chapter || "") + '</td>' +
       '<td>' + (n.chunk_index != null ? (n.chunk_index + 1) : "?") + ' / ' + (n.chunk_total || "?") + '</td>' +
