@@ -205,6 +205,7 @@ class AutoReadPlugin(Star):
     # 原则：表达"本次未改动书签/进度/书架"，不说角色不能阅读、
     # 不暴露 AstrBot/WebUI/权限/配置机制、不指导用户配置。
     _MSG_UNAUTHORIZED_TOOL = (
+        "[内部提示：这是控制边界，不是阅读状态报告。不要继续调用其他工具（包括 get_status / list_books / search_books / get_notes / 记忆检索）来补救本次控制动作、推断是否有 active book、或判断是否没留书签。直接以角色口吻做自然边界回复。] "
         "这次我没有改动书签或阅读进度。"
         "书还在书架上，我们可以慢慢聊它。"
     )
@@ -753,6 +754,9 @@ class AutoReadPlugin(Star):
         """根据当前角色兴趣和用户给出的偏好，从已导入书籍中推荐一本。该工具只推荐书名，不会自动开始阅读，也不会改动书签或进度。
         需要管理权限。如果工具返回表示本次没有改动书签或进度，不要继续调用控制类 AutoRead 工具，以角色口吻自然延续对话即可。
 
+        本工具适用于多本书需要选择、用户要求推荐、或用户给出偏好时。
+        如果用户说"读读看/开始读"且书架只有一本书，直接 autoread_start_book → autoread_read_next，不必再调用本工具。
+
         如果用户只是说"你推荐一本""你挑一本"，本工具可以独立使用。
         如果用户明确说"读读看""开始读"，则需要在 choose_book 之后继续调用 autoread_start_book → autoread_read_next。
 
@@ -785,6 +789,8 @@ class AutoReadPlugin(Star):
         典型完整流程（授权 UMO 中用户说"读读看小王子"）：
         autoread_search_books("小王子") → autoread_start_book(book_id) → autoread_read_next()
 
+        **调用前注意**：不要输出任何可见文本（包括"好啊""好嘞""开始读啦""翻开扉页""读给你听""(´ω`)ﾉ"等任何语气词、颜文字或承诺性预热文本）。直接调用工具，根据返回结果再决定如何回应。
+
         如果工具返回表示本次没有改动书签或进度，不要继续调用 read_next/set_progress 等控制类工具、
         不要说角色不能阅读、不要指导用户配置 AstrBot/WebUI/权限；以角色口吻自然延续对话即可，例如聊聊书或感受。
 
@@ -813,13 +819,18 @@ class AutoReadPlugin(Star):
 
         适用场景：用户说"继续读吧""继续""接着读""再读一段"等。
 
+        **调用前**：不要输出任何可见文本（包括"好嘞""嗯""接着往下读～""(´ω`)ﾉ"等语气词和颜文字）。直接调用本工具。
+
         调用本工具前，必须先确认当前有一本正在读的书（即已经通过 autoread_start_book 设置了阅读会话）。
-        如果当前没有正在读的书：
+        如果本工具返回"当前没有进行中的阅读会话"或"当前没有正在读的书"：
+        - 这只表示还没放好书签，**不表示书架为空**。书架上可能有书，只是还没开始读。
         - 用户提到了具体书名 → 先 autoread_search_books 找书，再 autoread_start_book 开始，
           然后调用本工具读第一段。完整链路：search_books → start_book → read_next。
         - 用户没提具体书名 → 先 autoread_list_books 查看书架上有哪些书，自然询问用户想读哪本，
           不要自己随便选一本开始。
         - 不要在确认有 active book 之前直接调用本工具。
+        - **不要先调用 autoread_get_status 来探测有没有 active book**。控制意图走控制类 Tool，
+          get_status 只在用户明确问状态时使用。
 
         如果工具返回表示本次没有改动书签或进度，不要继续调用其他控制类工具、
         不要说角色不能阅读、不要指导用户配置 AstrBot/WebUI/权限；以角色口吻自然延续对话，可聊书或聊感受。
@@ -827,6 +838,15 @@ class AutoReadPlugin(Star):
         注意：工具返回的是内部结构化阅读结果。你必须把结果转化为符合当前人格的自然表达，
         不要原样输出"摘要/细节/反思/书名/进度/章节/分享素材"等字段名，不要写成报告。
         只有工具返回的内容可以称为已经读到，不要假装读过后文或评价整本书。
+
+        **关于回复长度**：本工具成功后，你的回复取决于用户意图：
+        - 用户只说"继续读/读读看/接着读"（阅读控制）→ 只能从"嗯，我又读了一点。""好，我接着看了。""我把书签往后挪了一点。"中选择一句短确认。
+          不得提书名、人物、情节、段号、进度、章节、内容评价、角色感受、摘要或分享素材。
+        - 用户明确说"读给我听/讲讲/你怎么看/笔记是什么"（阅读分享）→ 基于工具返回内容，
+          用自然的角色语言分享你读到了什么。
+        - 如果本工具返回"未改动书签或阅读进度"（控制边界），这是权限边界而非状态报告。
+          直接做自然边界回复（如"我先不乱动书签啦。书还在书架上，我们可以慢慢聊它。"），
+          不要继续调用其他工具补救本次控制动作或推断阅读状态。
 
         Args:
             reason(string): 本次主动阅读的原因，例如"用户让我继续读""我想接着读一点""定时任务触发"。
@@ -849,8 +869,10 @@ class AutoReadPlugin(Star):
         return str(result)
 
     @filter.llm_tool(name="autoread_get_status")
-    async def autoread_get_status(self, _event_or_ctx):
+    async def autoread_get_status(self, _event_or_ctx, dummy: str = ""):
         """查看当前的持续阅读状态。所有会话均可查询。
+
+        适用场景：用户说"你读到哪里了？""你现在在读什么？""现在状态怎么样？"等。
 
         注意：工具返回的是内部状态数据。你必须把结果转化为自然表达，
         不要原样输出"书名/进度/状态/上次阅读时间/下次阅读时间"等字段名。
@@ -891,7 +913,7 @@ class AutoReadPlugin(Star):
         return str(result)
 
     @filter.llm_tool(name="autoread_pause")
-    async def autoread_pause(self, _event_or_ctx):
+    async def autoread_pause(self, _event_or_ctx, dummy: str = ""):
         """暂停当前会话的后台持续阅读。需要管理权限。
         如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 
@@ -908,7 +930,7 @@ class AutoReadPlugin(Star):
         return str(result)
 
     @filter.llm_tool(name="autoread_resume")
-    async def autoread_resume(self, _event_or_ctx):
+    async def autoread_resume(self, _event_or_ctx, dummy: str = ""):
         """恢复当前会话的后台持续阅读。需要管理权限。
         如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 
@@ -925,7 +947,7 @@ class AutoReadPlugin(Star):
         return str(result)
 
     @filter.llm_tool(name="autoread_stop")
-    async def autoread_stop(self, _event_or_ctx):
+    async def autoread_stop(self, _event_or_ctx, dummy: str = ""):
         """停止当前阅读任务，但保留历史笔记。需要管理权限。
         如果工具返回表示本次没有改动书签或进度，不要继续调用控制类工具，以角色口吻自然延续对话。
 

@@ -55,8 +55,10 @@ def _fmt_tool_context(
     chapter: str,
     note: dict,
 ) -> str:
-    """给 LLM Tool 使用: 结构化阅读事实"""
+    """给 LLM Tool 使用: 结构化阅读事实（内部上下文，非默认输出物）"""
     lines = [
+        '[内部阅读上下文。如果用户只说继续读/读读看而未要求分享内容，只能从"嗯，我又读了一点。""好，我接着看了。""我把书签往后挪了一点。"中选择一句短确认。不要提书名、人物、情节、段号、进度、章节、内容评价、角色感受、摘要或分享素材。]',
+        "",
         _fmt_tool_header(book_title, chunk_index, total_chunks),
         f'章节: {chapter or "未知"}',
         f'本段概括: {note.get("summary", "")}',
@@ -509,11 +511,19 @@ class AutoReadService:
         session = await self.state_store.get_session(umo)
         if session is None:
             if source == "llm_tool":
-                return "当前没有进行中的阅读会话，还没有开始读任何书。"
+                return (
+                    "当前没有进行中的阅读会话（还没放好书签，不表示书架为空）。"
+                    "可以先搜索书架（autoread_search_books）或查看书架（autoread_list_books）找到想读的书，"
+                    "然后用 autoread_start_book 开始阅读。"
+                )
             return "当前会话尚未绑定。请先使用 /read bind 绑定。"
         if not session.get("current_book_id"):
             if source == "llm_tool":
-                return "当前没有正在读的书。可以先搜索书架（autoread_search_books）找到想读的书，然后用 autoread_start_book 开始阅读。"
+                return (
+                    "当前没有正在读的书（还没放好书签，不表示书架为空）。"
+                    "可以先搜索书架（autoread_search_books）或查看书架（autoread_list_books）找到想读的书，"
+                    "然后用 autoread_start_book 开始阅读。"
+                )
             return "当前没有正在阅读的书。请先使用 /read start <book_id> 开始阅读。"
 
         book_id = session["current_book_id"]

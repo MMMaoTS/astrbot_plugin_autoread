@@ -51,7 +51,8 @@ JSON 格式如下:
   "share_message": "如果这一段值得之后自然分享给用户，你会如何说，限制在 220 字以内; 如果不值得分享则为空字符串",
   "memory_note": "适合沉淀为长期阅读经历的一句话，限制在 90 字以内",
   "open_questions": ["还不能确定、但值得后续留意的问题"],
-  "tags": ["最多 5 个简短标签"],
+  "tags": ["最多 5 个简短分类标签"],
+  "keywords": ["最多 5 个文本中出现的关键词或短语，用于后续检索"],
   "importance_score": 0.0,
   "needs_deeper_review": false
 }}
@@ -164,6 +165,7 @@ class NoteWriter:
                 memory_note=parsed.get("memory_note", ""),
                 open_questions=parsed.get("open_questions", []),
                 tags=parsed.get("tags", []),
+                keywords=parsed.get("keywords", []),
                 importance_score=float(parsed.get("importance_score", 0.0)),
                 needs_deeper_review=bool(parsed.get("needs_deeper_review", False)),
                 model_usage=mu,

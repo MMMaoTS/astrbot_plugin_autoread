@@ -74,6 +74,8 @@ def new_record(
     memory_note: str = "",
     open_questions: list | None = None,
     tags: list | None = None,
+    keywords: list | None = None,
+    chunk_ref: dict | None = None,
     importance_score: float = 0.0,
     needs_deeper_review: bool = False,
     deeper_review_done: bool = False,
@@ -86,6 +88,16 @@ def new_record(
     if chunk_range is None:
         chunk_range = [0, 0]
     now = _now_iso()
+    # 构建 chunk_ref（如未显式传入则从参数推断）
+    if chunk_ref is None:
+        cr_range = list(chunk_range) if chunk_range else [0, 0]
+        chunk_ref = {
+            "index": chunk_index,
+            "total": chunk_total,
+            "range": cr_range,
+            "chapter": chapter_title,
+        }
+
     return {
         "schema_version": 1,
         "record_id": _new_id("record"),
@@ -97,6 +109,7 @@ def new_record(
         "chunk_index": chunk_index,
         "chunk_total": chunk_total,
         "chunk_range": list(chunk_range),
+        "chunk_ref": chunk_ref,
         "source_stage": source_stage or record_type,
         "summary": summary,
         "detail": detail,
@@ -105,6 +118,7 @@ def new_record(
         "memory_note": memory_note,
         "open_questions": list(open_questions or []),
         "tags": list(tags or []),
+        "keywords": list(keywords or []),
         "importance_score": float(importance_score),
         "needs_deeper_review": bool(needs_deeper_review),
         "deeper_review_done": bool(deeper_review_done),
@@ -163,6 +177,8 @@ def normalize_record(raw: dict) -> dict:
         result.setdefault("memory_note", raw.get("memory_note", ""))
         result.setdefault("open_questions", raw.get("open_questions", []))
         result.setdefault("tags", raw.get("tags", []))
+        result.setdefault("keywords", raw.get("keywords", []))
+        result.setdefault("chunk_ref", raw.get("chunk_ref", None))
         result.setdefault("importance_score", raw.get("importance_score", 0.0))
         result.setdefault("needs_deeper_review", raw.get("needs_deeper_review", False))
         result.setdefault("deeper_review_done", raw.get("deeper_review_done", False))
@@ -207,6 +223,8 @@ def normalize_record(raw: dict) -> dict:
         "memory_note": raw.get("memory_note", ""),
         "open_questions": raw.get("open_questions", []),
         "tags": raw.get("tags", []),
+        "keywords": raw.get("keywords", []),
+        "chunk_ref": raw.get("chunk_ref", None),
         "importance_score": float(raw.get("importance_score", 0.0)),
         "needs_deeper_review": bool(raw.get("needs_deeper_review", False)),
         "deeper_review_done": bool(raw.get("deeper_review_done", False)),

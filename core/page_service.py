@@ -503,6 +503,7 @@ class WebUIService:
         for raw in notes:
             n = normalize_record(raw)
             mu = n.get("model_usage", {})
+            cr = n.get("chunk_ref") or {}
             items.append({
                 "record_id": n.get("record_id", ""),
                 "record_type": n.get("record_type", "chunk_note"),
@@ -511,6 +512,12 @@ class WebUIService:
                 "chapter_title": n.get("chapter_title", ""),
                 "chunk_index": n.get("chunk_index", 0),
                 "chunk_total": n.get("chunk_total", 0),
+                "chunk_ref": {
+                    "index": cr.get("index", n.get("chunk_index", 0)),
+                    "total": cr.get("total", n.get("chunk_total", 0)),
+                    "range": cr.get("range", n.get("chunk_range", [0, 0])),
+                    "chapter": cr.get("chapter", n.get("chapter_title", "")),
+                } if cr else None,
                 "summary": n.get("summary", ""),
                 "detail": n.get("detail", ""),
                 "reflection": n.get("reflection", ""),
@@ -518,6 +525,7 @@ class WebUIService:
                 "share_message": n.get("share_message", ""),
                 "open_questions": n.get("open_questions", []),
                 "tags": n.get("tags", []),
+                "keywords": n.get("keywords", []),
                 "importance_score": n.get("importance_score", 0.0),
                 "needs_deeper_review": n.get("needs_deeper_review", False),
                 "provider_id": mu.get("provider_id", ""),
@@ -528,12 +536,79 @@ class WebUIService:
                 "chapter": n.get("chapter_title", n.get("chapter", "")),
             })
 
+        # 当未指定 book_id 时，附加每本书的笔记统计
+        book_stats = []
+        if not book_id:
+            book_stats = await self._build_book_note_stats()
+
         return {
             "items": items,
             "page": page,
             "page_size": page_size,
             "total": total,
+            "book_stats": book_stats,
         }
+
+    async def _build_book_note_stats(self) -> list[dict]:
+        """构建每本书的笔记统计信息，供 WebUI 笔记页分书管理使用。"""
+        state = await self.state_store.load_state()
+        books = state.get("books", {})
+        notes_dir = self.data_dir / "notes"
+        stats_list = []
+
+        for bid, book in books.items():
+            notes_path = notes_dir / f"{bid}.notes.jsonl"
+            if not notes_path.exists():
+                # 书存在但没有笔记
+                stats_list.append({
+                    "book_id": bid,
+                    "book_title": book.get("title", bid),
+                    "author": book.get("author", ""),
+                    "display_name": book.get("display_name", book.get("title", bid)),
+                    "total_chunks": book.get("total_chunks", 0),
+                    "notes_count": 0,
+                    "last_note_at": "",
+                    "keywords_summary": [],
+                })
+                continue
+
+            notes_count = 0
+            last_note_at = ""
+            all_keywords: set[str] = set()
+            with open(notes_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        note = json.loads(line)
+                        notes_count += 1
+                        created = note.get("created_at", "")
+                        if created > last_note_at:
+                            last_note_at = created
+                        for kw in note.get("keywords", []):
+                            if isinstance(kw, str) and kw.strip():
+                                all_keywords.add(kw.strip())
+                        for tag in note.get("tags", []):
+                            if isinstance(tag, str) and tag.strip():
+                                all_keywords.add(tag.strip())
+                    except json.JSONDecodeError:
+                        continue
+
+            stats_list.append({
+                "book_id": bid,
+                "book_title": book.get("title", bid),
+                "author": book.get("author", ""),
+                "display_name": book.get("display_name", book.get("title", bid)),
+                "total_chunks": book.get("total_chunks", 0),
+                "notes_count": notes_count,
+                "last_note_at": last_note_at,
+                "keywords_summary": sorted(all_keywords)[:15],
+            })
+
+        # 按最近笔记时间倒序
+        stats_list.sort(key=lambda s: s.get("last_note_at", ""), reverse=True)
+        return stats_list
 
     async def get_note_detail(self, book_id: str, note_id: str) -> dict | None:
         if not self.validate_book_id(book_id):
@@ -551,6 +626,7 @@ class WebUIService:
         n["book_title"] = book.get("title", book_id)
         mu = n.get("model_usage", {})
 
+        cr = n.get("chunk_ref") or {}
         return {
             "record_id": n.get("record_id", ""),
             "record_type": n.get("record_type", "chunk_note"),
@@ -559,6 +635,12 @@ class WebUIService:
             "chapter_title": n.get("chapter_title", ""),
             "chunk_index": n.get("chunk_index", 0),
             "chunk_total": n.get("chunk_total", 0),
+            "chunk_ref": {
+                "index": cr.get("index", n.get("chunk_index", 0)),
+                "total": cr.get("total", n.get("chunk_total", 0)),
+                "range": cr.get("range", n.get("chunk_range", [0, 0])),
+                "chapter": cr.get("chapter", n.get("chapter_title", "")),
+            } if cr else None,
             "summary": n.get("summary", ""),
             "detail": n.get("detail", ""),
             "reflection": n.get("reflection", ""),
@@ -566,6 +648,7 @@ class WebUIService:
             "share_message": n.get("share_message", ""),
             "open_questions": n.get("open_questions", []),
             "tags": n.get("tags", []),
+            "keywords": n.get("keywords", []),
             "importance_score": n.get("importance_score", 0.0),
             "needs_deeper_review": n.get("needs_deeper_review", False),
             "deeper_review_done": n.get("deeper_review_done", False),

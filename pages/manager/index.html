@@ -235,17 +235,23 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 <div data-tab-panel="notes" class="tab-content" hidden>
   <section class="notes">
     <h2>阅读笔记 <span class="badge">只读</span></h2>
-    <div class="toolbar">
-      <select id="notes-book-filter"><option value="">全部书籍</option></select>
-      <input type="text" id="notes-keyword" placeholder="关键词搜索..." />
-      <button id="btn-notes-search" class="btn btn-secondary">搜索</button>
+    <!-- 第 1 层：书籍选择卡片 -->
+    <div id="notes-book-cards" class="book-cards-grid"></div>
+    <!-- 第 2 层：选中书籍的笔记列表（初始隐藏） -->
+    <div id="notes-book-detail" hidden>
+      <div class="toolbar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <strong id="notes-selected-book-title" style="font-size:16px"></strong>
+        <button id="btn-notes-back" class="btn btn-small btn-secondary">← 返回书架</button>
+        <input type="text" id="notes-keyword" placeholder="按关键词/标签筛选..." style="flex:1;min-width:160px" />
+        <button id="btn-notes-search" class="btn btn-secondary">筛选</button>
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr>
+          <th>时间</th><th>章节</th><th>段</th><th>类型</th><th>重要性</th><th>关键词</th><th>摘要</th><th>操作</th>
+        </tr></thead><tbody id="notes-tbody"></tbody></table>
+      </div>
+      <div class="pagination" id="notes-pagination"></div>
     </div>
-    <div class="table-wrap">
-      <table><thead><tr>
-        <th>时间</th><th>书名</th><th>章节</th><th>段</th><th>类型</th><th>模型</th><th>重要性</th><th>摘要</th><th>操作</th>
-      </tr></thead><tbody id="notes-tbody"></tbody></table>
-    </div>
-    <div class="pagination" id="notes-pagination"></div>
   </section>
 </div>
 
@@ -732,7 +738,7 @@ function saveBookTitle(bookId, inputEl, displayEl, editRow) {
     if (displayEl) displayEl.style.display = "";
     loadBooks();
     loadSessions();
-    loadNotes();
+    loadNotesBookCards();
   }).catch(function(err) {
     showError("编辑书名失败: " + (err.message || "未知错误"));
     if (saveBtn) saveBtn.disabled = false;
@@ -855,33 +861,89 @@ function renderSessionsTable(items) {
 }
 
 // ======================================================================
-// Notes (read-only)
+// Notes (book-first management)
 // ======================================================================
 var _notesPage = 1;
-function loadNotes(page) {
+var _notesSelectedBookId = "";
+var _notesSelectedBookTitle = "";
+
+// 第 1 层：加载书籍卡片概览
+function loadNotesBookCards() {
+  return apiGet("notes", { page: 1, page_size: 1 }).then(function(data) {
+    var stats = data.book_stats || [];
+    renderNotesBookCards(stats);
+  }).catch(function(err) { showError("加载笔记概览失败: " + err.message); });
+}
+
+function renderNotesBookCards(stats) {
+  var container = document.getElementById("notes-book-cards");
+  if (!stats.length) { container.innerHTML = '<p class="empty">暂无书籍笔记。请先导入书籍并阅读生成笔记。</p>'; return; }
+  container.innerHTML = stats.map(function(s) {
+    var kwHtml = (s.keywords_summary || []).slice(0, 8).map(function(k) {
+      return '<span class="badge" style="font-size:10px;margin:1px">' + escapeHtml(k) + '</span>';
+    }).join("") || '<span style="color:var(--muted)">暂无关键词</span>';
+    var authorHtml = s.author ? ' <span style="color:var(--muted)">— ' + escapeHtml(s.author) + '</span>' : '';
+    return '<div class="book-card" data-action="notes-select-book" data-book-id="' + escapeHtml(s.book_id) + '" data-book-title="' + escapeHtml(s.book_title) + '" style="cursor:pointer;border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:10px;transition:box-shadow .15s">' +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">' +
+        '<strong style="font-size:15px">' + escapeHtml(s.book_title) + '</strong>' +
+        '<span style="color:var(--muted);font-size:12px">' + (s.last_note_at ? formatTime(s.last_note_at) : '暂无笔记') + '</span>' +
+      '</div>' +
+      '<div style="margin-top:6px;font-size:12px;color:var(--muted)">' +
+        '笔记 ' + s.notes_count + ' 条' + authorHtml +
+        (s.total_chunks ? ' · 共 ' + s.total_chunks + ' 段' : '') +
+      '</div>' +
+      '<div style="margin-top:6px;line-height:1.6">' + kwHtml + '</div>' +
+    '</div>';
+  }).join("");
+}
+
+// 点击书籍卡片 → 进入该书笔记列表
+function selectNotesBook(bookId, bookTitle) {
+  _notesSelectedBookId = bookId;
+  _notesSelectedBookTitle = bookTitle;
+  document.getElementById("notes-book-cards").hidden = true;
+  document.getElementById("notes-book-detail").hidden = false;
+  document.getElementById("notes-selected-book-title").textContent = bookTitle;
+  document.getElementById("notes-keyword").value = "";
+  _notesPage = 1;
+  loadNotesForBook(_notesPage);
+}
+
+// 返回书架概览
+function backToNotesBookCards() {
+  _notesSelectedBookId = "";
+  _notesSelectedBookTitle = "";
+  document.getElementById("notes-book-cards").hidden = false;
+  document.getElementById("notes-book-detail").hidden = true;
+}
+
+// 加载选中书籍的笔记
+function loadNotesForBook(page) {
   _notesPage = page || 1;
-  var bookId = document.getElementById("notes-book-filter").value;
   var keyword = document.getElementById("notes-keyword").value.trim();
-  return apiGet("notes", { book_id: bookId, keyword: keyword, page: _notesPage, page_size: 20 }).then(function(data) {
+  return apiGet("notes", { book_id: _notesSelectedBookId, keyword: keyword, page: _notesPage, page_size: 20 }).then(function(data) {
     renderNotesTable(data.items);
     renderNotesPagination(data);
   }).catch(function(err) { showError("加载笔记失败: " + err.message); });
 }
+
 function renderNotesTable(items) {
   var tbody = document.getElementById("notes-tbody");
-  if (!items.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无阅读笔记。</td></tr>'; return; }
+  if (!items.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无阅读笔记。</td></tr>'; return; }
   tbody.innerHTML = items.map(function(n) {
-    return '<tr><td>' + formatTime(n.created_at) + '</td><td>' + escapeHtml(n.book_title) + '</td>' +
-      '<td>' + escapeHtml(n.chapter_title || n.chapter || "") + '</td><td>' + (n.chunk_index || 0) + '</td>' +
+    var kwDisplay = (n.keywords || []).slice(0, 4).join(", ") || (n.tags || []).slice(0, 4).join(", ") || "-";
+    return '<tr><td>' + formatTime(n.created_at) + '</td>' +
+      '<td>' + escapeHtml(n.chapter_title || n.chapter || "") + '</td>' +
+      '<td>' + (n.chunk_index != null ? (n.chunk_index + 1) : "?") + ' / ' + (n.chunk_total || "?") + '</td>' +
       '<td><span class="badge" style="font-size:10px">' + escapeHtml(n.record_type || "chunk_note") + '</span></td>' +
-      '<td>' + escapeHtml(n.stage || n.provider_id || "-") + '</td>' +
       '<td>' + (n.importance_score || 0).toFixed(2) + (n.needs_deeper_review ? " *" : "") + '</td>' +
+      '<td class="wrap" style="font-size:11px">' + escapeHtml(kwDisplay) + '</td>' +
       '<td class="wrap">' + escapeHtml(truncate(n.summary || "", 50)) + '</td>' +
       '<td>' +
         '<button class="btn btn-small btn-secondary" data-action="note-detail" data-book-id="' + escapeHtml(n.book_id) + '" data-note-id="' + escapeHtml(n.note_id || n.record_id || "") + '">查看</button>' +
         (_deleteEnabled
           ? ' <button type="button" class="btn btn-small btn-danger" data-action="note-delete" data-book-id="' + escapeHtml(n.book_id) + '" data-note-id="' + escapeHtml(n.note_id || n.record_id || "") + '">删除</button>'
-          : ' <button type="button" class="btn btn-small btn-secondary" disabled title="删除功能未启用（请在设置中开启 webui_delete_enabled）">删除</button>') +
+          : ' <button type="button" class="btn btn-small btn-secondary" disabled title="删除功能未启用（请在设置中开启 webui_delete_enabled">删除</button>') +
       '</td></tr>';
   }).join("");
 }
@@ -899,35 +961,26 @@ function loadNoteDetail(bookId, noteId) {
 function renderNoteDetail(data) {
   var body = document.getElementById("note-detail-body");
   var mu = data.model_usage || {};
+  var cr = data.chunk_ref || {};
+  var kwJoin = function(arr) { return (arr || []).map(function(s) { return escapeHtml(s); }).join(", ") || "-"; };
   body.innerHTML = '<dl><dt>record_id</dt><dd><code>' + escapeHtml(data.record_id || data.note_id) + '</code></dd>' +
     '<dt>类型</dt><dd>' + escapeHtml(data.record_type || "chunk_note") + '</dd>' +
     '<dt>书名</dt><dd>' + escapeHtml(data.book_title) + '</dd>' +
-    '<dt>段索引</dt><dd>' + (data.chunk_index || 0) + ' / ' + (data.chunk_total || "?") + '</dd>' +
-    '<dt>章节</dt><dd>' + escapeHtml(data.chapter_title || data.chapter || "") + '</dd>' +
+    '<dt>段位置</dt><dd>' + (cr.index != null ? ('第 ' + (cr.index + 1) + ' / ' + (cr.total || '?') + ' 段') : ((data.chunk_index || 0) + ' / ' + (data.chunk_total || '?'))) + '</dd>' +
+    '<dt>章节</dt><dd>' + escapeHtml(cr.chapter || data.chapter_title || data.chapter || "") + '</dd>' +
+    '<dt>字符范围</dt><dd>' + ((cr.range || []).join(" – ") || "-") + '</dd>' +
     '<dt>重要性</dt><dd>' + (data.importance_score || 0).toFixed(2) + (data.needs_deeper_review ? " (需复核)" : "") + '</dd>' +
     '<dt>阶段</dt><dd>' + escapeHtml(mu.stage || data.stage || "-") + '</dd>' +
     '<dt>Provider</dt><dd>' + escapeHtml(mu.provider_id || data.provider_id || "-") + '</dd>' +
     '<dt>创建时间</dt><dd>' + formatTime(data.created_at) + '</dd>' +
-    '<dt>标签</dt><dd>' + ((data.tags || []).join(", ") || "-") + '</dd></dl>' +
+    '<dt>标签</dt><dd>' + kwJoin(data.tags) + '</dd>' +
+    '<dt>关键词</dt><dd>' + kwJoin(data.keywords) + '</dd></dl>' +
     '<div class="field-block"><h4>摘要</h4><p>' + escapeHtml(data.summary) + '</p></div>' +
     '<div class="field-block"><h4>细节</h4><p>' + escapeHtml(data.detail || "（未记录）") + '</p></div>' +
     '<div class="field-block"><h4>感想</h4><p>' + escapeHtml(data.reflection || "（未记录）") + '</p></div>' +
     '<div class="field-block"><h4>长期记忆</h4><p>' + escapeHtml(data.memory_note || "（未记录）") + '</p></div>' +
     '<div class="field-block"><h4>分享文案</h4><p>' + escapeHtml(data.share_message || "（未设置）") + '</p></div>' +
     '<div class="field-block"><h4>待解问题</h4><p>' + ((data.open_questions || []).map(function(q) { return escapeHtml(q); }).join("<br>") || "（无）") + '</p></div>';
-}
-function updateNotesBookFilter(bookItems) {
-  var select = document.getElementById("notes-book-filter");
-  var current = select.value;
-  var existing = {};
-  Array.from(select.options).forEach(function(o) { existing[o.value] = true; });
-  (bookItems || []).forEach(function(b) {
-    if (!existing[b.book_id]) {
-      var opt = document.createElement("option");
-      opt.value = b.book_id; opt.textContent = b.title; select.appendChild(opt);
-    }
-  });
-  if (current) select.value = current;
 }
 
 // ======================================================================
@@ -1351,7 +1404,7 @@ function uploadServerBackup() {
 // Refresh all
 // ======================================================================
 function refreshAll() {
-  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotes(), loadBackupHistory(), loadServerBackups(), loadUploadSettings()]).then(function() {
+  return Promise.all([loadOverview(), loadBooks(), loadSessions(), loadNotesBookCards(), loadBackupHistory(), loadServerBackups(), loadUploadSettings()]).then(function() {
     return apiGet("books", { page: 1, page_size: 100 }).then(function(data) {
       updateNotesBookFilter(data.items);
     }).catch(function() {});
@@ -1415,8 +1468,9 @@ document.addEventListener("click", function(e) {
     case "note-detail": loadNoteDetail(target.dataset.bookId, target.dataset.noteId); break;
     case "books-prev": loadBooks(_booksPage - 1); break;
     case "books-next": loadBooks(_booksPage + 1); break;
-    case "notes-prev": loadNotes(_notesPage - 1); break;
-    case "notes-next": loadNotes(_notesPage + 1); break;
+    case "notes-prev": loadNotesForBook(_notesPage - 1); break;
+    case "notes-next": loadNotesForBook(_notesPage + 1); break;
+    case "notes-select-book": selectNotesBook(target.dataset.bookId, target.dataset.bookTitle); break;
     case "book-delete":
       (function() {
         var bookId = target.dataset.bookId;
@@ -1490,7 +1544,7 @@ document.addEventListener("click", function(e) {
             console.info("[autoread-ui] server-backup-restore confirmed", {name: name});
             apiPost("backups/restore", {name: name}).then(function(result) {
               showMessage(result.message || "恢复完成");
-              loadOverview(); loadBooks(); loadNotes(); loadSessions();
+              loadOverview(); loadBooks(); loadNotesBookCards(); loadSessions();
             }).catch(function(err) { showError("恢复失败: " + (err.message || "未知错误")); });
           });
         }).catch(function(err) {
@@ -1532,12 +1586,12 @@ if (exportResultOverlay) exportResultOverlay.addEventListener("click", function(
 document.getElementById("btn-refresh").addEventListener("click", refreshAll);
 document.getElementById("btn-upload").addEventListener("click", uploadBook);
 document.getElementById("btn-books-search").addEventListener("click", function() { loadBooks(1); });
-document.getElementById("btn-notes-search").addEventListener("click", function() { loadNotes(1); });
+document.getElementById("btn-notes-search").addEventListener("click", function() { loadNotesForBook(1); });
 document.getElementById("btn-close-book-detail").addEventListener("click", closePanel);
 document.getElementById("btn-close-note-detail").addEventListener("click", closePanel);
 document.getElementById("books-search").addEventListener("keydown", function(e) { if (e.key === "Enter") loadBooks(1); });
-document.getElementById("notes-keyword").addEventListener("keydown", function(e) { if (e.key === "Enter") loadNotes(1); });
-document.getElementById("notes-book-filter").addEventListener("change", function() { loadNotes(1); });
+document.getElementById("notes-keyword").addEventListener("keydown", function(e) { if (e.key === "Enter") loadNotesForBook(1); });
+document.getElementById("btn-notes-back").addEventListener("click", function() { backToNotesBookCards(); });
 
 document.querySelectorAll(".tab-btn").forEach(function(btn) {
   btn.addEventListener("click", function() { showTab(btn.dataset.tab); });
@@ -1677,7 +1731,7 @@ function deleteBook(bookId) {
 }
 
 function deleteNote(bookId, recordId) {
-  _doPost("notes/delete", {book_id: bookId, record_id: recordId}, "已删除", function() { loadNotes(); loadOverview(); })
+  _doPost("notes/delete", {book_id: bookId, record_id: recordId}, "已删除", function() { if (_notesSelectedBookId) { loadNotesForBook(); } else { loadNotesBookCards(); } loadOverview(); })
     .catch(function(err) { showError("删除笔记失败: " + (err.message || "未知错误")); });
 }
 
